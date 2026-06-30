@@ -4,6 +4,7 @@ compile_error!("g13-driver v0.1 targets Windows only; Linux support is planned f
 mod config;
 mod dispatcher;
 mod injector;
+mod joystick;
 mod protocol;
 mod usb;
 
