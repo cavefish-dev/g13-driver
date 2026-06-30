@@ -59,6 +59,7 @@ impl Dispatcher {
 
     fn apply(&self, actions: Vec<HoldAction>) {
         for action in actions {
+            log::debug!("joystick {action:?}");
             let result = match &action {
                 HoldAction::KeyDown(k) => self.injector.key_down(k),
                 HoldAction::KeyUp(k) => self.injector.key_up(k),
