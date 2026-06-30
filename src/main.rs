@@ -35,7 +35,7 @@ fn main() -> Result<()> {
     });
 
     let injector = Box::new(injector::windows::WindowsInjector::new());
-    let dispatcher = dispatcher::Dispatcher::new(config, injector);
+    let mut dispatcher = dispatcher::Dispatcher::new(config, injector);
 
     log::info!("g13-driver running — press Ctrl+C to stop");
 
@@ -44,6 +44,8 @@ fn main() -> Result<()> {
             log::warn!("dispatch error: {e:#}");
         }
     }
+
+    dispatcher.release_held();
 
     Ok(())
 }
