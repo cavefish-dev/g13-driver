@@ -1,0 +1,19 @@
+# G13 key bindings — edit and save to hot-reload without restarting
+#
+# Keys G1–G22. Modifiers: ctrl, shift, alt, windows (also: control, win)
+# Keys: a-z, 0-9, f1-f24, enter, esc, space, tab, backspace, delete,
+#       insert, home, end, pageup, pagedown, up, down, left, right
+
+[keys]
+G1  = "ctrl+c"
+G2  = "ctrl+v"
+G3  = "ctrl+z"
+G4  = "ctrl+shift+z"
+G5  = "f5"
+G6  = "alt+tab"
+G7  = "windows+d"
+G8  = "ctrl+alt+delete"
+G9  = "ctrl+s"
+G10 = "ctrl+a"
+G11 = "ctrl+f"
+G12 = "ctrl+w"
