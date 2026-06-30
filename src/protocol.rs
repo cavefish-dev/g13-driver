@@ -9,18 +9,32 @@ pub enum G13Key {
 pub enum G13Event {
     KeyDown(G13Key),
     KeyUp(G13Key),
+    JoystickMove { x: u8, y: u8 },
 }
 
 pub struct ReportParser {
     prev_keys: u32,
+    prev_x: u8,
+    prev_y: u8,
 }
 
 impl ReportParser {
     pub fn new() -> Self {
-        Self { prev_keys: 0 }
+        Self { prev_keys: 0, prev_x: 127, prev_y: 127 }
     }
 
     pub fn parse(&mut self, report: &[u8; 8]) -> Vec<G13Event> {
+        let mut events = Vec::new();
+
+        // Joystick: byte 1 = X, byte 2 = Y (verified on hardware).
+        let x = report[1];
+        let y = report[2];
+        if x != self.prev_x || y != self.prev_y {
+            self.prev_x = x;
+            self.prev_y = y;
+            events.push(G13Event::JoystickMove { x, y });
+        }
+
         // G-key bitmask is bytes 3,4,5 (byte 3 = G1-G8, byte 4 = G9-G16,
         // byte 5 = G17-G22). Bytes 1,2 are the joystick X/Y axes (centered at
         // 0x7F) and byte 5 bit7 is a constant flag — none are keys. Verified
@@ -33,7 +47,6 @@ impl ReportParser {
         let released = self.prev_keys & !current;
         self.prev_keys = current;
 
-        let mut events = Vec::new();
         for bit in 0..22u32 {
             if pressed  & (1 << bit) != 0 { events.push(G13Event::KeyDown(Self::bit_to_key(bit))); }
             if released & (1 << bit) != 0 { events.push(G13Event::KeyUp(Self::bit_to_key(bit))); }
@@ -70,7 +83,7 @@ mod tests {
     #[test]
     fn no_keys_no_events() {
         let mut p = ReportParser::new();
-        assert!(p.parse(&empty()).is_empty());
+        assert!(p.parse(&idle()).is_empty());
     }
 
     // Regression: centered joystick (0x7F,0x7F) and the byte-5 flag (0x80) must
@@ -79,6 +92,33 @@ mod tests {
     fn idle_report_emits_no_events() {
         let mut p = ReportParser::new();
         assert!(p.parse(&idle()).is_empty());
+    }
+
+    #[test]
+    fn joystick_move_emitted_on_x_change() {
+        let mut p = ReportParser::new();
+        let mut r = idle();
+        r[1] = 0x00; // stick full left
+        assert_eq!(p.parse(&r), vec![G13Event::JoystickMove { x: 0x00, y: 0x7F }]);
+    }
+
+    #[test]
+    fn joystick_no_move_when_centered_and_unchanged() {
+        let mut p = ReportParser::new();
+        p.parse(&idle());                 // first centered report
+        assert!(p.parse(&idle()).is_empty()); // unchanged -> no move
+    }
+
+    #[test]
+    fn key_and_joystick_move_together() {
+        let mut p = ReportParser::new();
+        let mut r = idle();
+        r[1] = 0xFF;            // stick full right
+        r[3] = 0b0000_0001;     // G1 down
+        let events = p.parse(&r);
+        assert!(events.contains(&G13Event::JoystickMove { x: 0xFF, y: 0x7F }));
+        assert!(events.contains(&G13Event::KeyDown(G13Key::G1)));
+        assert_eq!(events.len(), 2);
     }
 
     #[test]
