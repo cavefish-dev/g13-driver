@@ -73,21 +73,13 @@ impl ReportParser {
 mod tests {
     use super::*;
 
-    fn empty() -> [u8; 8] { [0u8; 8] }
-
     // Idle report captured from real hardware: joystick centered (bytes 1,2 = 0x7F),
     // byte 5 bit7 (0x80) is a constant flag, byte 7 is the joystick button.
     // The key bitmask lives in bytes 3,4,5 — NOT 1,2,3.
     fn idle() -> [u8; 8] { [0x01, 0x7F, 0x7F, 0x00, 0x00, 0x80, 0x00, 0x00] }
 
-    #[test]
-    fn no_keys_no_events() {
-        let mut p = ReportParser::new();
-        assert!(p.parse(&idle()).is_empty());
-    }
-
-    // Regression: centered joystick (0x7F,0x7F) and the byte-5 flag (0x80) must
-    // NOT be decoded as key presses. This is the hardware bug that misread bytes 1,2.
+    // A centered, no-key-pressed report must emit nothing — neither phantom keys
+    // (the bug that misread joystick bytes 1,2 as presses) nor a spurious move.
     #[test]
     fn idle_report_emits_no_events() {
         let mut p = ReportParser::new();
