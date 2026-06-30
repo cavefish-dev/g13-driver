@@ -35,7 +35,13 @@ fn main() -> Result<()> {
     });
 
     let injector = Box::new(injector::windows::WindowsInjector::new());
-    let mut dispatcher = dispatcher::Dispatcher::new(config, injector);
+    let mut dispatcher = dispatcher::Dispatcher::new(config.clone(), injector);
+
+    if let Some(j) = config.read().unwrap().joystick() {
+        if j.mode == config::JoystickMode::Mouse {
+            log::warn!("joystick mouse mode is configured but not yet implemented; stick will be inert");
+        }
+    }
 
     log::info!("g13-driver running — press Ctrl+C to stop");
 
