@@ -70,7 +70,7 @@ mod tests {
 
     fn make_config(pairs: &[(&str, &str)]) -> Arc<RwLock<Config>> {
         let keys = pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
-        Arc::new(RwLock::new(Config::from_raw(RawConfig { keys }).unwrap()))
+        Arc::new(RwLock::new(Config::from_raw(RawConfig { keys, joystick: None }).unwrap()))
     }
 
     #[test]

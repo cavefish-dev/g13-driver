@@ -8,11 +8,45 @@ use crate::protocol::G13Key;
 pub struct RawConfig {
     #[serde(default)]
     pub keys: HashMap<String, String>,
+    #[serde(default)]
+    pub joystick: Option<RawJoystick>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct RawJoystick {
+    #[serde(default = "default_mode")]
+    pub mode: String,
+    #[serde(default = "default_deadzone")]
+    pub deadzone: u16,
+    pub up: Option<String>,
+    pub down: Option<String>,
+    pub left: Option<String>,
+    pub right: Option<String>,
+}
+
+fn default_mode() -> String { "wasd".to_string() }
+fn default_deadzone() -> u16 { 30 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum JoystickMode {
+    Wasd,
+    Mouse,
+}
+
+#[derive(Debug, Clone)]
+pub struct JoystickConfig {
+    pub mode: JoystickMode,
+    pub deadzone: u8,
+    pub up: Option<String>,
+    pub down: Option<String>,
+    pub left: Option<String>,
+    pub right: Option<String>,
 }
 
 #[derive(Debug, Clone)]
 pub struct Config {
     key_bindings: HashMap<G13Key, String>,
+    joystick: Option<JoystickConfig>,
 }
 
 impl Config {
@@ -31,11 +65,21 @@ impl Config {
                 .with_context(|| format!("unknown G13 key: {}", name))?;
             key_bindings.insert(key, binding);
         }
-        Ok(Self { key_bindings })
+
+        let joystick = match raw.joystick {
+            Some(rj) => Some(parse_joystick(rj)?),
+            None => None,
+        };
+
+        Ok(Self { key_bindings, joystick })
     }
 
     pub fn get_binding(&self, key: G13Key) -> Option<&str> {
         self.key_bindings.get(&key).map(|s| s.as_str())
+    }
+
+    pub fn joystick(&self) -> Option<&JoystickConfig> {
+        self.joystick.as_ref()
     }
 }
 
@@ -56,6 +100,25 @@ fn parse_g13_key(s: &str) -> Option<G13Key> {
     }
 }
 
+fn parse_joystick(rj: RawJoystick) -> Result<JoystickConfig> {
+    let mode = match rj.mode.to_lowercase().as_str() {
+        "wasd" => JoystickMode::Wasd,
+        "mouse" => JoystickMode::Mouse,
+        other => anyhow::bail!("unknown joystick mode: {} (expected wasd or mouse)", other),
+    };
+    if rj.deadzone > 127 {
+        anyhow::bail!("joystick deadzone {} out of range (0-127)", rj.deadzone);
+    }
+    Ok(JoystickConfig {
+        mode,
+        deadzone: rj.deadzone as u8,
+        up: rj.up,
+        down: rj.down,
+        left: rj.left,
+        right: rj.right,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -64,7 +127,71 @@ mod tests {
     fn raw(pairs: &[(&str, &str)]) -> RawConfig {
         RawConfig {
             keys: pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+            joystick: None,
         }
+    }
+
+    #[test]
+    fn no_joystick_section_is_none() {
+        let config = Config::from_raw(raw(&[("G1", "ctrl+c")])).unwrap();
+        assert!(config.joystick().is_none());
+    }
+
+    #[test]
+    fn parses_joystick_section() {
+        let src = r#"
+[keys]
+G1 = "ctrl+c"
+
+[joystick]
+mode = "wasd"
+deadzone = 30
+up = "w"
+down = "s"
+left = "a"
+right = "d"
+"#;
+        let raw: RawConfig = toml::from_str(src).unwrap();
+        let config = Config::from_raw(raw).unwrap();
+        let j = config.joystick().expect("joystick config present");
+        assert_eq!(j.mode, JoystickMode::Wasd);
+        assert_eq!(j.deadzone, 30);
+        assert_eq!(j.up.as_deref(), Some("w"));
+        assert_eq!(j.right.as_deref(), Some("d"));
+    }
+
+    #[test]
+    fn joystick_mode_defaults_to_wasd() {
+        let src = r#"
+[joystick]
+deadzone = 10
+"#;
+        let raw: RawConfig = toml::from_str(src).unwrap();
+        let config = Config::from_raw(raw).unwrap();
+        assert_eq!(config.joystick().unwrap().mode, JoystickMode::Wasd);
+        assert_eq!(config.joystick().unwrap().deadzone, 10);
+    }
+
+    #[test]
+    fn deadzone_default_is_30() {
+        let src = "[joystick]\nup = \"w\"\n";
+        let raw: RawConfig = toml::from_str(src).unwrap();
+        let config = Config::from_raw(raw).unwrap();
+        assert_eq!(config.joystick().unwrap().deadzone, 30);
+    }
+
+    #[test]
+    fn deadzone_over_127_is_error() {
+        let src = "[joystick]\ndeadzone = 200\n";
+        let raw: RawConfig = toml::from_str(src).unwrap();
+        assert!(Config::from_raw(raw).is_err());
+    }
+
+    #[test]
+    fn unknown_joystick_mode_is_error() {
+        let src = "[joystick]\nmode = \"flight\"\n";
+        let raw: RawConfig = toml::from_str(src).unwrap();
+        assert!(Config::from_raw(raw).is_err());
     }
 
     #[test]
