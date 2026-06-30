@@ -21,9 +21,13 @@ impl ReportParser {
     }
 
     pub fn parse(&mut self, report: &[u8; 8]) -> Vec<G13Event> {
-        let current = (report[1] as u32)
-            | ((report[2] as u32) << 8)
-            | ((report[3] as u32) << 16);
+        // G-key bitmask is bytes 3,4,5 (byte 3 = G1-G8, byte 4 = G9-G16,
+        // byte 5 = G17-G22). Bytes 1,2 are the joystick X/Y axes (centered at
+        // 0x7F) and byte 5 bit7 is a constant flag — none are keys. Verified
+        // against real hardware; see milestones/.../02-hardware-bringup.md.
+        let current = (report[3] as u32)
+            | ((report[4] as u32) << 8)
+            | ((report[5] as u32) << 16);
 
         let pressed  = current & !self.prev_keys;
         let released = self.prev_keys & !current;
@@ -58,58 +62,71 @@ mod tests {
 
     fn empty() -> [u8; 8] { [0u8; 8] }
 
+    // Idle report captured from real hardware: joystick centered (bytes 1,2 = 0x7F),
+    // byte 5 bit7 (0x80) is a constant flag, byte 7 is the joystick button.
+    // The key bitmask lives in bytes 3,4,5 — NOT 1,2,3.
+    fn idle() -> [u8; 8] { [0x01, 0x7F, 0x7F, 0x00, 0x00, 0x80, 0x00, 0x00] }
+
     #[test]
     fn no_keys_no_events() {
         let mut p = ReportParser::new();
         assert!(p.parse(&empty()).is_empty());
     }
 
+    // Regression: centered joystick (0x7F,0x7F) and the byte-5 flag (0x80) must
+    // NOT be decoded as key presses. This is the hardware bug that misread bytes 1,2.
+    #[test]
+    fn idle_report_emits_no_events() {
+        let mut p = ReportParser::new();
+        assert!(p.parse(&idle()).is_empty());
+    }
+
     #[test]
     fn g1_press() {
         let mut p = ReportParser::new();
-        let mut r = empty();
-        r[1] = 0b0000_0001;
+        let mut r = idle();
+        r[3] = 0b0000_0001;
         assert_eq!(p.parse(&r), vec![G13Event::KeyDown(G13Key::G1)]);
     }
 
     #[test]
     fn g1_release() {
         let mut p = ReportParser::new();
-        let mut r = empty();
-        r[1] = 0b0000_0001;
+        let mut r = idle();
+        r[3] = 0b0000_0001;
         p.parse(&r);
-        assert_eq!(p.parse(&empty()), vec![G13Event::KeyUp(G13Key::G1)]);
+        assert_eq!(p.parse(&idle()), vec![G13Event::KeyUp(G13Key::G1)]);
     }
 
     #[test]
     fn g8_press() {
         let mut p = ReportParser::new();
-        let mut r = empty();
-        r[1] = 0b1000_0000;
+        let mut r = idle();
+        r[3] = 0b1000_0000;
         assert_eq!(p.parse(&r), vec![G13Event::KeyDown(G13Key::G8)]);
     }
 
     #[test]
     fn g9_press() {
         let mut p = ReportParser::new();
-        let mut r = empty();
-        r[2] = 0b0000_0001;
+        let mut r = idle();
+        r[4] = 0b0000_0001;
         assert_eq!(p.parse(&r), vec![G13Event::KeyDown(G13Key::G9)]);
     }
 
+    // Real capture for G22: [01,7F,7F,00,00,A0,00,00] — byte5 = 0x80 (flag) | 0x20 (G22).
     #[test]
     fn g22_press() {
         let mut p = ReportParser::new();
-        let mut r = empty();
-        r[3] = 0b0010_0000;
+        let r = [0x01, 0x7F, 0x7F, 0x00, 0x00, 0xA0, 0x00, 0x00];
         assert_eq!(p.parse(&r), vec![G13Event::KeyDown(G13Key::G22)]);
     }
 
     #[test]
     fn two_simultaneous_keys() {
         let mut p = ReportParser::new();
-        let mut r = empty();
-        r[1] = 0b0000_0011;
+        let mut r = idle();
+        r[3] = 0b0000_0011;
         let events = p.parse(&r);
         assert_eq!(events.len(), 2);
         assert!(events.contains(&G13Event::KeyDown(G13Key::G1)));

@@ -20,6 +20,10 @@ impl Dispatcher {
             let cfg = self.config.read().unwrap();
             cfg.get_binding(key).map(str::to_owned)
         };
+        match &binding {
+            Some(b) => log::debug!("{key:?} -> {b}"),
+            None => log::debug!("{key:?} -> (unmapped)"),
+        }
         if let Some(binding) = binding {
             let combo = KeyCombo::parse(&binding)?;
             self.injector.press(&combo)?;

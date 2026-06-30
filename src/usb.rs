@@ -28,6 +28,7 @@ impl UsbReader {
         loop {
             match self.handle.read_interrupt(ENDPOINT_IN, &mut buf, READ_TIMEOUT) {
                 Ok(8) => {
+                    log::trace!("raw report: {buf:02X?}");
                     for event in parser.parse(&buf) {
                         if tx.send(event).is_err() {
                             return Ok(());
