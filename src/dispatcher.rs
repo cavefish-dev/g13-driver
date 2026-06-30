@@ -40,18 +40,30 @@ mod tests {
     use crate::protocol::{G13Event, G13Key};
     use std::sync::{Arc, Mutex, RwLock};
 
-    struct MockInjector(Arc<Mutex<Vec<KeyCombo>>>);
+    struct MockInjector {
+        combos: Arc<Mutex<Vec<KeyCombo>>>,
+        holds: Arc<Mutex<Vec<String>>>,
+    }
 
     impl MockInjector {
         fn new() -> (Self, Arc<Mutex<Vec<KeyCombo>>>) {
-            let calls = Arc::new(Mutex::new(Vec::new()));
-            (Self(calls.clone()), calls)
+            let combos = Arc::new(Mutex::new(Vec::new()));
+            let holds = Arc::new(Mutex::new(Vec::new()));
+            (Self { combos: combos.clone(), holds }, combos)
         }
     }
 
     impl KeyInjector for MockInjector {
         fn press(&self, combo: &KeyCombo) -> anyhow::Result<()> {
-            self.0.lock().unwrap().push(combo.clone());
+            self.combos.lock().unwrap().push(combo.clone());
+            Ok(())
+        }
+        fn key_down(&self, key: &str) -> anyhow::Result<()> {
+            self.holds.lock().unwrap().push(format!("down:{}", key));
+            Ok(())
+        }
+        fn key_up(&self, key: &str) -> anyhow::Result<()> {
+            self.holds.lock().unwrap().push(format!("up:{}", key));
             Ok(())
         }
     }

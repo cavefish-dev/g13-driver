@@ -40,6 +40,21 @@ impl WindowsInjector {
     }
 }
 
+impl WindowsInjector {
+    fn send(&self, key: &str, flags: u32) -> Result<()> {
+        let vk = *self.key_map.get(key)
+            .with_context(|| format!("unknown key: {}", key))?;
+        let input = Self::make_input(vk, flags);
+        let sent = unsafe {
+            SendInput(1, &input, std::mem::size_of::<INPUT>() as i32)
+        };
+        if sent == 0 {
+            log::warn!("SendInput returned 0 for key {} (flags {})", key, flags);
+        }
+        Ok(())
+    }
+}
+
 impl KeyInjector for WindowsInjector {
     fn press(&self, combo: &KeyCombo) -> Result<()> {
         let vk = *self.key_map.get(&combo.key)
@@ -66,5 +81,13 @@ impl KeyInjector for WindowsInjector {
             log::warn!("SendInput returned 0 for combo {:?}", combo);
         }
         Ok(())
+    }
+
+    fn key_down(&self, key: &str) -> Result<()> {
+        self.send(key, 0)
+    }
+
+    fn key_up(&self, key: &str) -> Result<()> {
+        self.send(key, KEYEVENTF_KEYUP)
     }
 }
