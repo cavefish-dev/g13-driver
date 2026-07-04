@@ -1,5 +1,5 @@
 use std::collections::HashSet;
-use crate::protocol::{G13Event, G13Key};
+use crate::protocol::{G13Event, G13Key, MKey};
 
 /// USB connection status shown in the monitor.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -14,6 +14,7 @@ pub enum Connection {
 #[derive(Debug, Clone)]
 pub struct DeviceState {
     pub pressed: HashSet<G13Key>,
+    pub mkeys: HashSet<MKey>,
     pub joy_x: u8,
     pub joy_y: u8,
     pub connection: Connection,
@@ -23,6 +24,7 @@ impl Default for DeviceState {
     fn default() -> Self {
         Self {
             pressed: HashSet::new(),
+            mkeys: HashSet::new(),
             joy_x: 127,
             joy_y: 127,
             connection: Connection::Disconnected("connecting".to_string()),
@@ -46,7 +48,8 @@ impl DeviceState {
                 self.joy_x = *x;
                 self.joy_y = *y;
             }
-            G13Event::MKeyDown(_) | G13Event::MKeyUp(_) => {} // tracked in a later task
+            G13Event::MKeyDown(m) => { self.mkeys.insert(*m); }
+            G13Event::MKeyUp(m) => { self.mkeys.remove(m); }
         }
     }
 }
@@ -103,5 +106,15 @@ mod tests {
         s.apply(&G13Event::JoystickMove { x: 10, y: 240 });
         assert_eq!(s.joy_x, 10);
         assert_eq!(s.joy_y, 240);
+    }
+
+    #[test]
+    fn mkey_down_and_up_tracked() {
+        use crate::protocol::MKey;
+        let mut s = DeviceState::new();
+        s.apply(&G13Event::MKeyDown(MKey::M2));
+        assert!(s.mkeys.contains(&MKey::M2));
+        s.apply(&G13Event::MKeyUp(MKey::M2));
+        assert!(!s.mkeys.contains(&MKey::M2));
     }
 }

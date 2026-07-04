@@ -8,7 +8,7 @@ use crate::config::ProfileSet;
 use crate::device_state::{Connection, DeviceState};
 use crate::dispatcher::Dispatcher;
 use crate::injector::windows::WindowsInjector;
-use crate::protocol::{G13Event, G13Key};
+use crate::protocol::{G13Event, G13Key, MKey};
 use crate::runtime;
 
 pub fn run(config: Arc<RwLock<ProfileSet>>) -> Result<()> {
@@ -157,6 +157,10 @@ impl eframe::App for MonitorApp {
                     Connection::Connected => ui.colored_label(egui::Color32::from_rgb(95, 214, 138), "● Connected"),
                     Connection::Disconnected(why) => ui.colored_label(egui::Color32::from_rgb(220, 90, 90), format!("○ {why}")),
                 };
+                if let Some(name) = self.profiles.read().unwrap().active_name() {
+                    ui.separator();
+                    ui.label(format!("Profile: {name}"));
+                }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let mut active = !self.dry_run.load(Ordering::Relaxed);
                     if ui.selectable_label(active, "Active").clicked() { active = true; }
@@ -285,6 +289,17 @@ impl MonitorApp {
                         });
                     });
                 });
+
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    ui.label("M-keys:");
+                    let hot = egui::Color32::from_rgb(127, 224, 160);
+                    let dim = egui::Color32::from_gray(140);
+                    for (m, label) in [(MKey::M1, "M1"), (MKey::M2, "M2"), (MKey::M3, "M3"), (MKey::MR, "MR")] {
+                        let on = snapshot.mkeys.contains(&m);
+                        ui.colored_label(if on { hot } else { dim }, label);
+                    }
+                });
             });
         });
     }
@@ -293,21 +308,42 @@ impl MonitorApp {
 
     fn render_profiles(&self, ui: &mut egui::Ui) {
         ui.heading("Profiles");
-        ui.label("Switch the active binding set. Planned: M1/M2/M3/MR select profiles live.");
+        ui.label("M1/M2/M3 select the bound profile. Click a slot to switch (same as pressing the M-key).");
         ui.add_space(8.0);
-        for (name, active) in [("Default", true), ("M1 — Game", false), ("M2 — Editing", false), ("M3 — Media", false)] {
-            ui.horizontal(|ui| {
-                let _ = ui.selectable_label(active, format!("{name}{}", if active { "   (active)" } else { "" }));
-            });
+
+        let (active, slots) = {
+            let set = self.profiles.read().unwrap();
+            let slots = [
+                (MKey::M1, set.name(MKey::M1).map(String::from)),
+                (MKey::M2, set.name(MKey::M2).map(String::from)),
+                (MKey::M3, set.name(MKey::M3).map(String::from)),
+            ];
+            (set.active(), slots)
+        };
+
+        let mut switch_to: Option<MKey> = None;
+        for (m, name) in &slots {
+            let label = match name {
+                Some(n) => format!("{m:?}  —  {n}"),
+                None => format!("{m:?}  —  (unassigned)"),
+            };
+            let is_active = *m == active;
+            if ui.add_enabled(name.is_some(), egui::SelectableLabel::new(is_active, label)).clicked() {
+                switch_to = Some(*m);
+            }
         }
-        ui.add_space(8.0);
-        ui.horizontal(|ui| {
-            let _ = ui.button("New");
-            let _ = ui.button("Rename");
-            let _ = ui.button("Delete");
-        });
+        if let Some(m) = switch_to {
+            self.profiles.write().unwrap().set_active(m);
+        }
+
+        ui.add_space(10.0);
+        ui.separator();
+        ui.label("Available in profiles/:");
+        for f in self.profiles.read().unwrap().available() {
+            ui.weak(f);
+        }
         ui.add_space(6.0);
-        ui.weak("(placeholder — profile switching is not implemented yet)");
+        ui.weak("(assigning files to slots and editing bindings are planned)");
     }
 
     fn render_bindings(&self, ui: &mut egui::Ui) {
