@@ -30,7 +30,17 @@ plan: `docs/superpowers/plans/2026-07-03-gui-monitor-dry-run.md`.
   Dry-run injects nothing, Active injects, toggle-back releases held keys, unplug→Retry
   reconnects. eframe 0.31.1 builds cleanly on the GNU toolchain.
 
+## Conventions / known exceptions
+- The GUI/consumer use `mutex.lock().unwrap()`. This is an accepted exception to the
+  "no `unwrap` in the runtime path" rule (like the USB/`SendInput` manual-verify exceptions):
+  a `Mutex` poisons only if a thread panics *while holding* it, and every critical section
+  here is trivial (`clone`, `apply`, a field write, an atomic load) and cannot panic — so
+  the `unwrap` is unreachable, not a latent crash.
+
 ## Follow-ups
+- UX polish: the Disconnected pill shows the raw reason string (drop of the literal word
+  "Disconnected"); the default `Connection` string is a placeholder ("connecting").
+- Clean up the pre-existing `usb.rs` needless-`mut` warning (predates this work).
 - System tray + minimize-to-tray + start-in-tray + remember-last-state (the original
   "minimize to tray" vision — next GUI sub-project).
 - Automatic reconnect polling (beyond the manual Retry button).
