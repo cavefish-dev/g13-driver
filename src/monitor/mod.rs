@@ -113,6 +113,16 @@ fn consumer_loop(
     }
 }
 
+// Rows approximating the physical G13 key arrangement.
+const ROWS: [&[G13Key]; 6] = [
+    &[G13Key::G1, G13Key::G2, G13Key::G3, G13Key::G4],
+    &[G13Key::G5, G13Key::G6, G13Key::G7, G13Key::G8],
+    &[G13Key::G9, G13Key::G10, G13Key::G11, G13Key::G12],
+    &[G13Key::G13, G13Key::G14, G13Key::G15],
+    &[G13Key::G16, G13Key::G17, G13Key::G18, G13Key::G19],
+    &[G13Key::G20, G13Key::G21, G13Key::G22],
+];
+
 impl eframe::App for MonitorApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let snapshot = self.state.lock().unwrap().clone();
@@ -129,26 +139,89 @@ impl eframe::App for MonitorApp {
                     if ui.selectable_label(active, "Active").clicked() { active = true; }
                     else if ui.selectable_label(!active, "Dry-run").clicked() { active = false; }
                     self.dry_run.store(!active, Ordering::Relaxed);
+                    ui.label("mode:");
                 });
             });
         });
 
+        egui::TopBottomPanel::bottom("ft").show(ctx, |ui| {
+            let cfg = self.config.read().unwrap();
+            let joy = cfg.joystick()
+                .map(|j| format!("joystick: {:?}, deadzone {}", j.mode, j.deadzone))
+                .unwrap_or_else(|| "joystick: disabled".to_string());
+            ui.label(format!("config.toml · {joy}"));
+            if let Connection::Disconnected(_) = &snapshot.connection {
+                if ui.button("Retry connection").clicked() {
+                    self.start_consumer(ctx.clone());
+                }
+            }
+        });
+
         egui::CentralPanel::default().show(ctx, |ui| {
             let cfg = self.config.read().unwrap();
-            ui.horizontal_wrapped(|ui| {
-                for key in G13Key::ALL {
-                    let pressed = snapshot.pressed.contains(&key);
-                    let binding = cfg.get_binding(key).unwrap_or("—");
-                    let text = format!("{key:?}\n{binding}");
-                    let color = if pressed { egui::Color32::from_rgb(20, 54, 31) } else { egui::Color32::from_gray(38) };
-                    egui::Frame::new().fill(color).inner_margin(4.0).show(ui, |ui| {
-                        ui.set_width(58.0);
-                        ui.label(text);
+            ui.horizontal(|ui| {
+                // Left: G-key grid in physical rows.
+                ui.vertical(|ui| {
+                    for row in ROWS {
+                        ui.horizontal(|ui| {
+                            for &key in row {
+                                let pressed = snapshot.pressed.contains(&key);
+                                let binding = cfg.get_binding(key).unwrap_or("—");
+                                let fill = if pressed { egui::Color32::from_rgb(20, 54, 31) } else { egui::Color32::from_gray(38) };
+                                egui::Frame::new().fill(fill).inner_margin(4.0).corner_radius(4.0).show(ui, |ui| {
+                                    ui.set_width(58.0);
+                                    ui.vertical(|ui| {
+                                        ui.strong(format!("{key:?}"));
+                                        ui.small(binding);
+                                    });
+                                });
+                            }
+                        });
+                    }
+                });
+
+                ui.separator();
+
+                // Right: joystick panel.
+                ui.vertical(|ui| {
+                    ui.label("JOYSTICK");
+                    let (dz, up, down, left, right) = cfg.joystick()
+                        .map(|j| (
+                            j.deadzone,
+                            j.up.clone().unwrap_or_default(),
+                            j.down.clone().unwrap_or_default(),
+                            j.left.clone().unwrap_or_default(),
+                            j.right.clone().unwrap_or_default(),
+                        ))
+                        .unwrap_or((30, "w".into(), "s".into(), "a".into(), "d".into()));
+
+                    let size = egui::vec2(140.0, 140.0);
+                    let (resp, painter) = ui.allocate_painter(size, egui::Sense::hover());
+                    let rect = resp.rect;
+                    painter.rect_stroke(rect, 4.0, egui::Stroke::new(1.0, egui::Color32::from_gray(90)), egui::StrokeKind::Inside);
+                    // deadzone circle (radius scaled from the 0..255 axis range)
+                    let c = rect.center();
+                    let dz_r = rect.width() * (dz as f32 / 255.0);
+                    painter.circle_stroke(c, dz_r, egui::Stroke::new(1.0, egui::Color32::from_gray(70)));
+                    // live position dot
+                    let px = rect.left() + rect.width() * (snapshot.joy_x as f32 / 255.0);
+                    let py = rect.top() + rect.height() * (snapshot.joy_y as f32 / 255.0);
+                    painter.circle_filled(egui::pos2(px, py), 6.0, egui::Color32::from_rgb(127, 224, 160));
+
+                    let hot = egui::Color32::from_rgb(127, 224, 160);
+                    let dim = egui::Color32::from_gray(140);
+                    let a_left = snapshot.joy_x < 127u8.saturating_sub(dz);
+                    let a_right = snapshot.joy_x > 127u8.saturating_add(dz);
+                    let a_up = snapshot.joy_y < 127u8.saturating_sub(dz);
+                    let a_down = snapshot.joy_y > 127u8.saturating_add(dz);
+                    ui.horizontal(|ui| {
+                        ui.colored_label(if a_up { hot } else { dim }, format!("↑{up}"));
+                        ui.colored_label(if a_down { hot } else { dim }, format!("↓{down}"));
+                        ui.colored_label(if a_left { hot } else { dim }, format!("←{left}"));
+                        ui.colored_label(if a_right { hot } else { dim }, format!("→{right}"));
                     });
-                }
+                });
             });
-            ui.separator();
-            ui.label(format!("joystick  x={}  y={}", snapshot.joy_x, snapshot.joy_y));
         });
     }
 }
