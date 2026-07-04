@@ -15,8 +15,11 @@ pub fn run(config: Arc<RwLock<Config>>) -> Result<()> {
     let state = Arc::new(Mutex::new(DeviceState::new()));
     let dry_run = Arc::new(AtomicBool::new(true)); // first launch = Dry-run
 
+    // Fixed, non-resizable window sized to fit the content of every tab.
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_inner_size([720.0, 500.0]),
+        viewport: egui::ViewportBuilder::default()
+            .with_inner_size([660.0, 560.0])
+            .with_resizable(false),
         ..Default::default()
     };
 
@@ -29,10 +32,30 @@ pub fn run(config: Arc<RwLock<Config>>) -> Result<()> {
     Ok(())
 }
 
+/// Which section of the window is shown. Monitor is live today; the rest are
+/// UI-vision placeholders being prototyped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Tab {
+    Monitor,
+    Profiles,
+    Bindings,
+    Lcd,
+    Settings,
+}
+
+const TABS: [(Tab, &str); 5] = [
+    (Tab::Monitor, "Monitor"),
+    (Tab::Profiles, "Profiles"),
+    (Tab::Bindings, "Bindings"),
+    (Tab::Lcd, "LCD"),
+    (Tab::Settings, "Settings"),
+];
+
 pub struct MonitorApp {
     config: Arc<RwLock<Config>>,
     state: Arc<Mutex<DeviceState>>,
     dry_run: Arc<AtomicBool>,
+    tab: Tab,
 }
 
 impl MonitorApp {
@@ -42,7 +65,7 @@ impl MonitorApp {
         state: Arc<Mutex<DeviceState>>,
         dry_run: Arc<AtomicBool>,
     ) -> Self {
-        let app = Self { config, state, dry_run };
+        let app = Self { config, state, dry_run, tab: Tab::Monitor };
         app.start_consumer(cc.egui_ctx.clone());
         app
     }
@@ -113,14 +136,14 @@ fn consumer_loop(
     }
 }
 
-// Physical G13 key arrangement: rows of 7, 7, 5, 3. The short rows are centered
-// under the wide ones via a left pad of empty cells (`.0`); the right margin is
-// naturally empty. Left pad 1 for the 5-row, 2 for the 3-row.
-const ROWS: [(usize, &[G13Key]); 4] = [
-    (0, &[G13Key::G1, G13Key::G2, G13Key::G3, G13Key::G4, G13Key::G5, G13Key::G6, G13Key::G7]),
-    (0, &[G13Key::G8, G13Key::G9, G13Key::G10, G13Key::G11, G13Key::G12, G13Key::G13, G13Key::G14]),
-    (1, &[G13Key::G15, G13Key::G16, G13Key::G17, G13Key::G18, G13Key::G19]),
-    (2, &[G13Key::G20, G13Key::G21, G13Key::G22]),
+// Physical G13 key arrangement: rows of 7, 7, 5, 3. Each row is centered when
+// rendered, so the short rows sit under the wide ones and the whole block is
+// centered in the window.
+const ROWS: [&[G13Key]; 4] = [
+    &[G13Key::G1, G13Key::G2, G13Key::G3, G13Key::G4, G13Key::G5, G13Key::G6, G13Key::G7],
+    &[G13Key::G8, G13Key::G9, G13Key::G10, G13Key::G11, G13Key::G12, G13Key::G13, G13Key::G14],
+    &[G13Key::G15, G13Key::G16, G13Key::G17, G13Key::G18, G13Key::G19],
+    &[G13Key::G20, G13Key::G21, G13Key::G22],
 ];
 
 impl eframe::App for MonitorApp {
@@ -157,83 +180,188 @@ impl eframe::App for MonitorApp {
             }
         });
 
+        egui::SidePanel::left("nav").resizable(false).min_width(104.0).show(ctx, |ui| {
+            ui.add_space(6.0);
+            for (tab, label) in TABS {
+                if ui.selectable_label(self.tab == tab, label).clicked() {
+                    self.tab = tab;
+                }
+            }
+        });
+
         egui::CentralPanel::default().show(ctx, |ui| {
-            let cfg = self.config.read().unwrap();
-            ui.horizontal(|ui| {
-                // Left: G-key grid in physical rows.
-                ui.vertical(|ui| {
-                    for (pad, row) in ROWS {
-                        ui.horizontal(|ui| {
-                            // Transparent spacer cells matching a key cell's footprint,
-                            // to center the short rows under the wide ones.
-                            for _ in 0..pad {
-                                egui::Frame::new().inner_margin(4.0).show(ui, |ui| {
-                                    ui.set_width(58.0);
-                                    ui.vertical(|ui| {
-                                        ui.strong(" ");
-                                        ui.small(" ");
-                                    });
-                                });
-                            }
-                            for &key in row {
-                                let pressed = snapshot.pressed.contains(&key);
-                                let binding = cfg.get_binding(key).unwrap_or("—");
-                                let fill = if pressed { egui::Color32::from_rgb(20, 54, 31) } else { egui::Color32::from_gray(38) };
-                                egui::Frame::new().fill(fill).inner_margin(4.0).corner_radius(4.0).show(ui, |ui| {
-                                    ui.set_width(58.0);
-                                    ui.vertical(|ui| {
-                                        ui.strong(format!("{key:?}"));
-                                        ui.small(binding);
-                                    });
-                                });
-                            }
-                        });
-                    }
-                });
+            match self.tab {
+                Tab::Monitor => self.render_monitor(ui, &snapshot),
+                Tab::Profiles => self.render_profiles(ui),
+                Tab::Bindings => self.render_bindings(ui),
+                Tab::Lcd => self.render_lcd(ui),
+                Tab::Settings => self.render_settings(ui),
+            }
+        });
+    }
+}
 
-                ui.separator();
+impl MonitorApp {
+    /// The live view: physical-layout key grid, with the joystick panel below it.
+    fn render_monitor(&self, ui: &mut egui::Ui, snapshot: &DeviceState) {
+        let cfg = self.config.read().unwrap();
 
-                // Right: joystick panel.
-                ui.vertical(|ui| {
-                    ui.label("JOYSTICK");
-                    let (dz, up, down, left, right) = cfg.joystick()
-                        .map(|j| (
-                            j.deadzone,
-                            j.up.clone().unwrap_or_default(),
-                            j.down.clone().unwrap_or_default(),
-                            j.left.clone().unwrap_or_default(),
-                            j.right.clone().unwrap_or_default(),
-                        ))
-                        .unwrap_or((30, "w".into(), "s".into(), "a".into(), "d".into()));
+        // Deterministic centering: a cell is exactly 62px wide (48 content + 8
+        // inner margin + 6 outer margin) with inter-cell spacing zeroed, so a row
+        // is `len * 62`. Center each row inside a fixed block (widest row = 7), and
+        // center that block in the available width. Long bindings truncate rather
+        // than stretching a cell (full bindings live on the Bindings tab).
+        const CELL: f32 = 62.0;
+        const BLOCK_W: f32 = 7.0 * CELL;
+        let indent = ((ui.available_width() - BLOCK_W) * 0.5).max(0.0);
 
-                    let size = egui::vec2(140.0, 140.0);
-                    let (resp, painter) = ui.allocate_painter(size, egui::Sense::hover());
-                    let rect = resp.rect;
-                    painter.rect_stroke(rect, 4.0, egui::Stroke::new(1.0, egui::Color32::from_gray(90)), egui::StrokeKind::Inside);
-                    // deadzone circle (radius scaled from the 0..255 axis range)
-                    let c = rect.center();
-                    let dz_r = rect.width() * (dz as f32 / 255.0);
-                    painter.circle_stroke(c, dz_r, egui::Stroke::new(1.0, egui::Color32::from_gray(70)));
-                    // live position dot
-                    let px = rect.left() + rect.width() * (snapshot.joy_x as f32 / 255.0);
-                    let py = rect.top() + rect.height() * (snapshot.joy_y as f32 / 255.0);
-                    painter.circle_filled(egui::pos2(px, py), 6.0, egui::Color32::from_rgb(127, 224, 160));
+        ui.horizontal(|ui| {
+            ui.add_space(indent);
+            ui.vertical(|ui| {
+                ui.set_width(BLOCK_W);
 
-                    let hot = egui::Color32::from_rgb(127, 224, 160);
-                    let dim = egui::Color32::from_gray(140);
-                    let a_left = snapshot.joy_x < 127u8.saturating_sub(dz);
-                    let a_right = snapshot.joy_x > 127u8.saturating_add(dz);
-                    let a_up = snapshot.joy_y < 127u8.saturating_sub(dz);
-                    let a_down = snapshot.joy_y > 127u8.saturating_add(dz);
+                for row in ROWS {
                     ui.horizontal(|ui| {
-                        ui.colored_label(if a_up { hot } else { dim }, format!("↑{up}"));
-                        ui.colored_label(if a_down { hot } else { dim }, format!("↓{down}"));
-                        ui.colored_label(if a_left { hot } else { dim }, format!("←{left}"));
-                        ui.colored_label(if a_right { hot } else { dim }, format!("→{right}"));
+                        ui.spacing_mut().item_spacing.x = 0.0;
+                        ui.add_space((BLOCK_W - row.len() as f32 * CELL) * 0.5);
+                        for &key in row {
+                            let pressed = snapshot.pressed.contains(&key);
+                            let binding = cfg.get_binding(key).unwrap_or("—");
+                            let fill = if pressed { egui::Color32::from_rgb(20, 54, 31) } else { egui::Color32::from_gray(38) };
+                            egui::Frame::new().fill(fill).inner_margin(4.0).outer_margin(3.0).corner_radius(4.0).show(ui, |ui| {
+                                ui.set_width(48.0);
+                                ui.vertical(|ui| {
+                                    ui.strong(format!("{key:?}"));
+                                    ui.add(egui::Label::new(egui::RichText::new(binding).small()).truncate());
+                                });
+                            });
+                        }
+                    });
+                }
+
+                ui.add_space(10.0);
+                ui.separator();
+                ui.add_space(6.0);
+
+                // Joystick, centered under the grid.
+                ui.horizontal(|ui| {
+                    ui.add_space((BLOCK_W - 140.0) * 0.5);
+                    ui.vertical(|ui| {
+                        ui.label("JOYSTICK");
+                        let (dz, up, down, left, right) = cfg.joystick()
+                            .map(|j| (
+                                j.deadzone,
+                                j.up.clone().unwrap_or_default(),
+                                j.down.clone().unwrap_or_default(),
+                                j.left.clone().unwrap_or_default(),
+                                j.right.clone().unwrap_or_default(),
+                            ))
+                            .unwrap_or((30, "w".into(), "s".into(), "a".into(), "d".into()));
+
+                        let size = egui::vec2(140.0, 140.0);
+                        let (resp, painter) = ui.allocate_painter(size, egui::Sense::hover());
+                        let rect = resp.rect;
+                        painter.rect_stroke(rect, 4.0, egui::Stroke::new(1.0, egui::Color32::from_gray(90)), egui::StrokeKind::Inside);
+                        let c = rect.center();
+                        let dz_r = rect.width() * (dz as f32 / 255.0);
+                        painter.circle_stroke(c, dz_r, egui::Stroke::new(1.0, egui::Color32::from_gray(70)));
+                        let px = rect.left() + rect.width() * (snapshot.joy_x as f32 / 255.0);
+                        let py = rect.top() + rect.height() * (snapshot.joy_y as f32 / 255.0);
+                        painter.circle_filled(egui::pos2(px, py), 6.0, egui::Color32::from_rgb(127, 224, 160));
+
+                        let hot = egui::Color32::from_rgb(127, 224, 160);
+                        let dim = egui::Color32::from_gray(140);
+                        let a_left = snapshot.joy_x < 127u8.saturating_sub(dz);
+                        let a_right = snapshot.joy_x > 127u8.saturating_add(dz);
+                        let a_up = snapshot.joy_y < 127u8.saturating_sub(dz);
+                        let a_down = snapshot.joy_y > 127u8.saturating_add(dz);
+                        ui.horizontal(|ui| {
+                            ui.colored_label(if a_up { hot } else { dim }, format!("↑{up}"));
+                            ui.colored_label(if a_down { hot } else { dim }, format!("↓{down}"));
+                            ui.colored_label(if a_left { hot } else { dim }, format!("←{left}"));
+                            ui.colored_label(if a_right { hot } else { dim }, format!("→{right}"));
+                        });
                     });
                 });
             });
         });
+    }
+
+    // ---- UI-vision placeholders (not wired to real behavior yet) ----
+
+    fn render_profiles(&self, ui: &mut egui::Ui) {
+        ui.heading("Profiles");
+        ui.label("Switch the active binding set. Planned: M1/M2/M3/MR select profiles live.");
+        ui.add_space(8.0);
+        for (name, active) in [("Default", true), ("M1 — Game", false), ("M2 — Editing", false), ("M3 — Media", false)] {
+            ui.horizontal(|ui| {
+                let _ = ui.selectable_label(active, format!("{name}{}", if active { "   (active)" } else { "" }));
+            });
+        }
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            let _ = ui.button("New");
+            let _ = ui.button("Rename");
+            let _ = ui.button("Delete");
+        });
+        ui.add_space(6.0);
+        ui.weak("(placeholder — profile switching is not implemented yet)");
+    }
+
+    fn render_bindings(&self, ui: &mut egui::Ui) {
+        ui.heading("Bindings — Default");
+        ui.label("Edit what each G-key sends. Planned: click a key to rebind.");
+        ui.add_space(8.0);
+        let cfg = self.config.read().unwrap();
+        egui::ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
+            for row in ROWS {
+                for &key in row {
+                    let binding = cfg.get_binding(key).unwrap_or("—");
+                    ui.horizontal(|ui| {
+                        ui.monospace(format!("{key:?}"));
+                        ui.add_space(8.0);
+                        ui.label(binding);
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let _ = ui.button("Edit");
+                        });
+                    });
+                }
+            }
+        });
+        ui.add_space(6.0);
+        ui.weak("(placeholder — Edit buttons are inert)");
+    }
+
+    fn render_lcd(&self, ui: &mut egui::Ui) {
+        ui.heading("LCD  (160 × 43)");
+        ui.label("Preview and choose what shows on the G13's screen. Planned for v0.4.");
+        ui.add_space(8.0);
+        // 3x-scale preview of the monochrome 160x43 panel.
+        let size = egui::vec2(160.0 * 3.0, 43.0 * 3.0);
+        let (resp, painter) = ui.allocate_painter(size, egui::Sense::hover());
+        let rect = resp.rect;
+        painter.rect_filled(rect, 2.0, egui::Color32::from_rgb(20, 30, 24));
+        painter.rect_stroke(rect, 2.0, egui::Stroke::new(1.0, egui::Color32::from_gray(90)), egui::StrokeKind::Inside);
+        let green = egui::Color32::from_rgb(120, 230, 150);
+        let o = rect.left_top();
+        painter.text(o + egui::vec2(8.0, 6.0), egui::Align2::LEFT_TOP, "G13 Driver", egui::FontId::monospace(16.0), green);
+        painter.text(o + egui::vec2(8.0, 34.0), egui::Align2::LEFT_TOP, "Profile: Default", egui::FontId::monospace(13.0), green);
+        painter.text(o + egui::vec2(8.0, 58.0), egui::Align2::LEFT_TOP, "Active · 12:04", egui::FontId::monospace(13.0), green);
+        ui.add_space(8.0);
+        ui.weak("(placeholder — no LCD output yet; needs the display protocol)");
+    }
+
+    fn render_settings(&self, ui: &mut egui::Ui) {
+        ui.heading("Settings");
+        ui.add_space(8.0);
+        let mut dry = self.dry_run.load(Ordering::Relaxed);
+        ui.checkbox(&mut dry, "Start in Dry-run (safe)");
+        self.dry_run.store(dry, Ordering::Relaxed);
+        let mut f = false;
+        ui.checkbox(&mut f, "Start minimized to tray");
+        ui.checkbox(&mut f, "Launch at login");
+        ui.add_space(6.0);
+        ui.weak("(placeholder — only the Dry-run toggle is live; the rest are mockups)");
     }
 }
 
@@ -244,7 +372,7 @@ mod tests {
 
     #[test]
     fn rows_cover_all_22_keys_once() {
-        let flat: Vec<_> = ROWS.iter().flat_map(|(_, r)| r.iter()).collect();
+        let flat: Vec<_> = ROWS.iter().flat_map(|r| r.iter()).collect();
         assert_eq!(flat.len(), 22, "the physical layout must render all 22 G-keys");
         let unique: HashSet<_> = flat.iter().collect();
         // 22 unique keys out of 22 possible variants => every key exactly once.
