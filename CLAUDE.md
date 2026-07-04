@@ -103,6 +103,11 @@ Phases are tracked as milestone files. Summary from the spec:
 v0.2 joystick->WASD/mouse + M-key profiles + Windows Service · v0.3 macros + shell commands ·
 v0.4 LCD (160x43) · v0.5 RGB backlight · v1.0 Linux (udev+uinput) + GUI configurator.
 
+> **Note:** the GUI was partly pulled forward from v1.0 — a default-launch **dry-run
+> input monitor** (egui/eframe) shipped early to ease hardware testing without
+> injecting into other apps. Run with no args for the GUI; `--headless` for the
+> console driver. See `milestones/finished/gui-monitor.md`.
+
 ## Milestones
 
 Work is tracked as one markdown file per milestone, filed by lifecycle state under
