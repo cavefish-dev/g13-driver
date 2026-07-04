@@ -113,14 +113,14 @@ fn consumer_loop(
     }
 }
 
-// Rows approximating the physical G13 key arrangement.
-const ROWS: [&[G13Key]; 6] = [
-    &[G13Key::G1, G13Key::G2, G13Key::G3, G13Key::G4],
-    &[G13Key::G5, G13Key::G6, G13Key::G7, G13Key::G8],
-    &[G13Key::G9, G13Key::G10, G13Key::G11, G13Key::G12],
-    &[G13Key::G13, G13Key::G14, G13Key::G15],
-    &[G13Key::G16, G13Key::G17, G13Key::G18, G13Key::G19],
-    &[G13Key::G20, G13Key::G21, G13Key::G22],
+// Physical G13 key arrangement: rows of 7, 7, 5, 3. The short rows are centered
+// under the wide ones via a left pad of empty cells (`.0`); the right margin is
+// naturally empty. Left pad 1 for the 5-row, 2 for the 3-row.
+const ROWS: [(usize, &[G13Key]); 4] = [
+    (0, &[G13Key::G1, G13Key::G2, G13Key::G3, G13Key::G4, G13Key::G5, G13Key::G6, G13Key::G7]),
+    (0, &[G13Key::G8, G13Key::G9, G13Key::G10, G13Key::G11, G13Key::G12, G13Key::G13, G13Key::G14]),
+    (1, &[G13Key::G15, G13Key::G16, G13Key::G17, G13Key::G18, G13Key::G19]),
+    (2, &[G13Key::G20, G13Key::G21, G13Key::G22]),
 ];
 
 impl eframe::App for MonitorApp {
@@ -162,8 +162,19 @@ impl eframe::App for MonitorApp {
             ui.horizontal(|ui| {
                 // Left: G-key grid in physical rows.
                 ui.vertical(|ui| {
-                    for row in ROWS {
+                    for (pad, row) in ROWS {
                         ui.horizontal(|ui| {
+                            // Transparent spacer cells matching a key cell's footprint,
+                            // to center the short rows under the wide ones.
+                            for _ in 0..pad {
+                                egui::Frame::new().inner_margin(4.0).show(ui, |ui| {
+                                    ui.set_width(58.0);
+                                    ui.vertical(|ui| {
+                                        ui.strong(" ");
+                                        ui.small(" ");
+                                    });
+                                });
+                            }
                             for &key in row {
                                 let pressed = snapshot.pressed.contains(&key);
                                 let binding = cfg.get_binding(key).unwrap_or("—");
@@ -233,7 +244,7 @@ mod tests {
 
     #[test]
     fn rows_cover_all_22_keys_once() {
-        let flat: Vec<_> = ROWS.iter().flat_map(|r| r.iter()).collect();
+        let flat: Vec<_> = ROWS.iter().flat_map(|(_, r)| r.iter()).collect();
         assert_eq!(flat.len(), 22, "the physical layout must render all 22 G-keys");
         let unique: HashSet<_> = flat.iter().collect();
         // 22 unique keys out of 22 possible variants => every key exactly once.
