@@ -1,0 +1,24 @@
+# Default profile (M1) — general shortcuts.
+# A profile is a full binding set. Keys G1–G22; modifiers: ctrl, shift, alt, windows.
+
+[keys]
+G1  = "ctrl+c"
+G2  = "ctrl+v"
+G3  = "ctrl+z"
+G4  = "ctrl+shift+z"
+G5  = "f5"
+G6  = "alt+tab"
+G7  = "windows+d"
+G8  = "ctrl+x"
+G9  = "ctrl+s"
+G10 = "ctrl+a"
+G11 = "ctrl+f"
+G12 = "ctrl+w"
+
+[joystick]
+mode = "wasd"      # "wasd" (implemented) | "mouse" (parsed, not yet implemented)
+deadzone = 30      # 0-127; distance from center (127) before a key fires
+up = "w"
+down = "s"
+left = "a"
+right = "d"

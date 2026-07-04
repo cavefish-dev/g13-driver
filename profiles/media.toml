@@ -1,0 +1,8 @@
+# Media profile (M3) — playback / navigation. No joystick section (stick inert).
+
+[keys]
+G1 = "space"
+G2 = "left"
+G3 = "right"
+G4 = "up"
+G5 = "down"
