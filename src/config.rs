@@ -44,12 +44,12 @@ pub struct JoystickConfig {
 }
 
 #[derive(Debug, Clone)]
-pub struct Config {
+pub struct Profile {
     key_bindings: HashMap<G13Key, String>,
     joystick: Option<JoystickConfig>,
 }
 
-impl Config {
+impl Profile {
     pub fn load(path: &PathBuf) -> Result<Self> {
         let content = std::fs::read_to_string(path)
             .with_context(|| format!("failed to read config: {}", path.display()))?;
@@ -82,6 +82,10 @@ impl Config {
         self.joystick.as_ref()
     }
 }
+
+/// Temporary alias so existing consumers keep compiling while the profile
+/// layer is introduced. Removed in the ProfileSet wiring task.
+pub type Config = Profile;
 
 fn parse_g13_key(s: &str) -> Option<G13Key> {
     match s.to_uppercase().as_str() {
@@ -133,7 +137,7 @@ mod tests {
 
     #[test]
     fn no_joystick_section_is_none() {
-        let config = Config::from_raw(raw(&[("G1", "ctrl+c")])).unwrap();
+        let config = Profile::from_raw(raw(&[("G1", "ctrl+c")])).unwrap();
         assert!(config.joystick().is_none());
     }
 
@@ -152,7 +156,7 @@ left = "a"
 right = "d"
 "#;
         let raw: RawConfig = toml::from_str(src).unwrap();
-        let config = Config::from_raw(raw).unwrap();
+        let config = Profile::from_raw(raw).unwrap();
         let j = config.joystick().expect("joystick config present");
         assert_eq!(j.mode, JoystickMode::Wasd);
         assert_eq!(j.deadzone, 30);
@@ -167,7 +171,7 @@ right = "d"
 deadzone = 10
 "#;
         let raw: RawConfig = toml::from_str(src).unwrap();
-        let config = Config::from_raw(raw).unwrap();
+        let config = Profile::from_raw(raw).unwrap();
         assert_eq!(config.joystick().unwrap().mode, JoystickMode::Wasd);
         assert_eq!(config.joystick().unwrap().deadzone, 10);
     }
@@ -176,7 +180,7 @@ deadzone = 10
     fn deadzone_default_is_30() {
         let src = "[joystick]\nup = \"w\"\n";
         let raw: RawConfig = toml::from_str(src).unwrap();
-        let config = Config::from_raw(raw).unwrap();
+        let config = Profile::from_raw(raw).unwrap();
         assert_eq!(config.joystick().unwrap().deadzone, 30);
     }
 
@@ -184,37 +188,37 @@ deadzone = 10
     fn deadzone_over_127_is_error() {
         let src = "[joystick]\ndeadzone = 200\n";
         let raw: RawConfig = toml::from_str(src).unwrap();
-        assert!(Config::from_raw(raw).is_err());
+        assert!(Profile::from_raw(raw).is_err());
     }
 
     #[test]
     fn unknown_joystick_mode_is_error() {
         let src = "[joystick]\nmode = \"flight\"\n";
         let raw: RawConfig = toml::from_str(src).unwrap();
-        assert!(Config::from_raw(raw).is_err());
+        assert!(Profile::from_raw(raw).is_err());
     }
 
     #[test]
     fn loads_bindings_from_raw() {
-        let config = Config::from_raw(raw(&[("G1", "ctrl+c"), ("G2", "f5")])).unwrap();
+        let config = Profile::from_raw(raw(&[("G1", "ctrl+c"), ("G2", "f5")])).unwrap();
         assert_eq!(config.get_binding(G13Key::G1), Some("ctrl+c"));
         assert_eq!(config.get_binding(G13Key::G2), Some("f5"));
     }
 
     #[test]
     fn unknown_g13_key_is_error() {
-        assert!(Config::from_raw(raw(&[("G99", "ctrl+c")])).is_err());
+        assert!(Profile::from_raw(raw(&[("G99", "ctrl+c")])).is_err());
     }
 
     #[test]
     fn unmapped_key_returns_none() {
-        let config = Config::from_raw(raw(&[])).unwrap();
+        let config = Profile::from_raw(raw(&[])).unwrap();
         assert_eq!(config.get_binding(G13Key::G5), None);
     }
 
     #[test]
     fn key_names_are_case_insensitive() {
-        let config = Config::from_raw(raw(&[("g1", "ctrl+c")])).unwrap();
+        let config = Profile::from_raw(raw(&[("g1", "ctrl+c")])).unwrap();
         assert_eq!(config.get_binding(G13Key::G1), Some("ctrl+c"));
     }
 
@@ -226,7 +230,7 @@ G1 = "ctrl+c"
 G3 = "f5"
 "#;
         let raw: RawConfig = toml::from_str(src).unwrap();
-        let config = Config::from_raw(raw).unwrap();
+        let config = Profile::from_raw(raw).unwrap();
         assert_eq!(config.get_binding(G13Key::G1), Some("ctrl+c"));
         assert_eq!(config.get_binding(G13Key::G3), Some("f5"));
         assert_eq!(config.get_binding(G13Key::G2), None);
