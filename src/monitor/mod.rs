@@ -127,7 +127,7 @@ impl eframe::App for MonitorApp {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let mut active = !self.dry_run.load(Ordering::Relaxed);
                     if ui.selectable_label(active, "Active").clicked() { active = true; }
-                    if ui.selectable_label(!active, "Dry-run").clicked() { active = false; }
+                    else if ui.selectable_label(!active, "Dry-run").clicked() { active = false; }
                     self.dry_run.store(!active, Ordering::Relaxed);
                 });
             });
