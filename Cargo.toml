@@ -11,6 +11,7 @@ anyhow  = "1"
 log     = "0.4"
 env_logger = "0.11"
 notify  = "6"
+eframe  = "0.31"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_UI_Input_KeyboardAndMouse"] }

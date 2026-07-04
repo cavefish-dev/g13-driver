@@ -6,6 +6,7 @@ mod device_state;
 mod dispatcher;
 mod injector;
 mod joystick;
+mod monitor;
 mod protocol;
 mod runtime;
 mod usb;
@@ -17,6 +18,11 @@ fn main() -> Result<()> {
     env_logger::init();
 
     let config = runtime::load_config_and_watch(PathBuf::from("config.toml"))?;
-    let rx = runtime::spawn_usb_reader()?;
-    runtime::run_headless(config, rx)
+
+    if std::env::args().any(|a| a == "--headless") {
+        let rx = runtime::spawn_usb_reader()?;
+        runtime::run_headless(config, rx)
+    } else {
+        monitor::run(config)
+    }
 }
