@@ -5,17 +5,6 @@ pub enum G13Key {
     G17, G18, G19, G20, G21, G22,
 }
 
-impl G13Key {
-    /// All 22 G-keys in ascending order, for iteration (e.g. the monitor grid).
-    pub const ALL: [G13Key; 22] = [
-        G13Key::G1,  G13Key::G2,  G13Key::G3,  G13Key::G4,  G13Key::G5,
-        G13Key::G6,  G13Key::G7,  G13Key::G8,  G13Key::G9,  G13Key::G10,
-        G13Key::G11, G13Key::G12, G13Key::G13, G13Key::G14, G13Key::G15,
-        G13Key::G16, G13Key::G17, G13Key::G18, G13Key::G19, G13Key::G20,
-        G13Key::G21, G13Key::G22,
-    ];
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum G13Event {
     KeyDown(G13Key),
@@ -176,13 +165,4 @@ mod tests {
         assert!(events.contains(&G13Event::KeyDown(G13Key::G2)));
     }
 
-    #[test]
-    fn all_lists_every_key_once() {
-        use std::collections::HashSet;
-        assert_eq!(G13Key::ALL.len(), 22);
-        let unique: HashSet<_> = G13Key::ALL.iter().collect();
-        assert_eq!(unique.len(), 22);
-        assert_eq!(G13Key::ALL[0], G13Key::G1);
-        assert_eq!(G13Key::ALL[21], G13Key::G22);
-    }
 }

@@ -225,3 +225,18 @@ impl eframe::App for MonitorApp {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::ROWS;
+    use std::collections::HashSet;
+
+    #[test]
+    fn rows_cover_all_22_keys_once() {
+        let flat: Vec<_> = ROWS.iter().flat_map(|r| r.iter()).collect();
+        assert_eq!(flat.len(), 22, "the physical layout must render all 22 G-keys");
+        let unique: HashSet<_> = flat.iter().collect();
+        // 22 unique keys out of 22 possible variants => every key exactly once.
+        assert_eq!(unique.len(), 22, "no key may be duplicated or missing in ROWS");
+    }
+}
