@@ -102,6 +102,8 @@ pub struct ProfileSet {
     m1_name: Option<String>,
     m2_name: Option<String>,
     m3_name: Option<String>,
+    /// Invariant: always points at a populated slot (or M1). `set_active` refuses
+    /// empty slots, so `active_profile()`/`active_name()` stay coherent.
     active: MKey,
 }
 

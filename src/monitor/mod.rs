@@ -61,11 +61,11 @@ pub struct MonitorApp {
 impl MonitorApp {
     fn new(
         cc: &eframe::CreationContext<'_>,
-        config: Arc<RwLock<ProfileSet>>,
+        profiles: Arc<RwLock<ProfileSet>>,
         state: Arc<Mutex<DeviceState>>,
         dry_run: Arc<AtomicBool>,
     ) -> Self {
-        let app = Self { profiles: config, state, dry_run, tab: Tab::Monitor };
+        let app = Self { profiles, state, dry_run, tab: Tab::Monitor };
         app.start_consumer(cc.egui_ctx.clone());
         app
     }
@@ -311,14 +311,14 @@ impl MonitorApp {
         ui.label("M1/M2/M3 select the bound profile. Click a slot to switch (same as pressing the M-key).");
         ui.add_space(8.0);
 
-        let (active, slots) = {
+        let (active, slots, available) = {
             let set = self.profiles.read().unwrap();
             let slots = [
                 (MKey::M1, set.name(MKey::M1).map(String::from)),
                 (MKey::M2, set.name(MKey::M2).map(String::from)),
                 (MKey::M3, set.name(MKey::M3).map(String::from)),
             ];
-            (set.active(), slots)
+            (set.active(), slots, set.available())
         };
 
         let mut switch_to: Option<MKey> = None;
@@ -339,7 +339,7 @@ impl MonitorApp {
         ui.add_space(10.0);
         ui.separator();
         ui.label("Available in profiles/:");
-        for f in self.profiles.read().unwrap().available() {
+        for f in &available {
             ui.weak(f);
         }
         ui.add_space(6.0);
