@@ -1,8 +1,8 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use serde::Deserialize;
-use crate::protocol::G13Key;
+use crate::protocol::{G13Key, MKey};
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct RawConfig {
@@ -83,6 +83,122 @@ impl Profile {
     }
 }
 
+#[derive(Debug, Deserialize)]
+struct RawManifest {
+    profiles_dir: Option<String>,
+    m1: Option<String>,
+    m2: Option<String>,
+    m3: Option<String>,
+}
+
+/// The loaded profiles plus which M-key is active. Replaces a bare `Profile`
+/// as the shared state so both the dispatcher and the GUI see profiles + active.
+#[derive(Debug, Clone)]
+pub struct ProfileSet {
+    profiles_dir: PathBuf,
+    m1: Profile,
+    m2: Option<Profile>,
+    m3: Option<Profile>,
+    m1_name: Option<String>,
+    m2_name: Option<String>,
+    m3_name: Option<String>,
+    active: MKey,
+}
+
+impl ProfileSet {
+    /// Load from the manifest at `config_path`. Manifest mode when a top-level
+    /// `m1` is present; otherwise the file is itself the single M1 profile
+    /// (legacy). Paths resolve relative to the config file's directory.
+    pub fn load(config_path: &Path) -> Result<Self> {
+        let content = std::fs::read_to_string(config_path)
+            .with_context(|| format!("failed to read config: {}", config_path.display()))?;
+        let raw: RawManifest = toml::from_str(&content)
+            .with_context(|| format!("failed to parse config: {}", config_path.display()))?;
+        let base = config_path.parent().unwrap_or_else(|| Path::new("."));
+
+        if let Some(m1_name) = raw.m1 {
+            // Manifest mode.
+            let dir = base.join(raw.profiles_dir.as_deref().unwrap_or("profiles"));
+            let m1 = Profile::load(&dir.join(&m1_name))
+                .with_context(|| format!("failed to load M1 profile {m1_name}"))?;
+            let load_opt = |name: &Option<String>| -> (Option<Profile>, Option<String>) {
+                match name {
+                    Some(n) => match Profile::load(&dir.join(n)) {
+                        Ok(p) => (Some(p), Some(n.clone())),
+                        Err(e) => { log::warn!("skipping profile {n}: {e:#}"); (None, None) }
+                    },
+                    None => (None, None),
+                }
+            };
+            let (m2, m2_name) = load_opt(&raw.m2);
+            let (m3, m3_name) = load_opt(&raw.m3);
+            Ok(Self {
+                profiles_dir: dir,
+                m1, m2, m3,
+                m1_name: Some(m1_name),
+                m2_name, m3_name,
+                active: MKey::M1,
+            })
+        } else {
+            // Legacy: the config file is a single profile.
+            let m1 = Profile::load(&config_path.to_path_buf())?;
+            let name = config_path.file_name().and_then(|s| s.to_str()).map(String::from);
+            Ok(Self {
+                profiles_dir: base.to_path_buf(),
+                m1, m2: None, m3: None,
+                m1_name: name, m2_name: None, m3_name: None,
+                active: MKey::M1,
+            })
+        }
+    }
+
+    pub fn active(&self) -> MKey { self.active }
+
+    pub fn active_profile(&self) -> &Profile {
+        match self.active {
+            MKey::M2 => self.m2.as_ref().unwrap_or(&self.m1),
+            MKey::M3 => self.m3.as_ref().unwrap_or(&self.m1),
+            _ => &self.m1,
+        }
+    }
+
+    /// Switch the active profile. No-op (returns false) for MR or an empty slot.
+    pub fn set_active(&mut self, k: MKey) -> bool {
+        let ok = match k {
+            MKey::M1 => true,
+            MKey::M2 => self.m2.is_some(),
+            MKey::M3 => self.m3.is_some(),
+            MKey::MR => false,
+        };
+        if ok { self.active = k; }
+        ok
+    }
+
+    pub fn name(&self, k: MKey) -> Option<&str> {
+        match k {
+            MKey::M1 => self.m1_name.as_deref(),
+            MKey::M2 => self.m2_name.as_deref(),
+            MKey::M3 => self.m3_name.as_deref(),
+            MKey::MR => None,
+        }
+    }
+
+    pub fn active_name(&self) -> Option<&str> { self.name(self.active) }
+
+    /// All `.toml` files in the profiles folder (for the GUI browse list).
+    pub fn available(&self) -> Vec<String> {
+        let mut names = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(&self.profiles_dir) {
+            for e in entries.flatten() {
+                if let Some(n) = e.file_name().to_str() {
+                    if n.ends_with(".toml") { names.push(n.to_string()); }
+                }
+            }
+        }
+        names
+    }
+}
+
 /// Temporary alias so existing consumers keep compiling while the profile
 /// layer is introduced. Removed in the ProfileSet wiring task.
 pub type Config = Profile;
@@ -121,6 +237,74 @@ fn parse_joystick(rj: RawJoystick) -> Result<JoystickConfig> {
         left: rj.left,
         right: rj.right,
     })
+}
+
+#[cfg(test)]
+mod profileset_tests {
+    use super::*;
+    use crate::protocol::MKey;
+
+    fn write(dir: &std::path::Path, name: &str, body: &str) {
+        std::fs::write(dir.join(name), body).unwrap();
+    }
+
+    // Build a temp dir under the OS temp with a unique suffix from the test name.
+    fn tmp(tag: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("g13-test-{tag}"));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("profiles")).unwrap();
+        d
+    }
+
+    #[test]
+    fn loads_manifest_and_switches() {
+        let d = tmp("manifest");
+        write(&d.join("profiles"), "default.toml", "[keys]\nG1 = \"ctrl+c\"\n");
+        write(&d.join("profiles"), "game.toml", "[keys]\nG1 = \"space\"\n");
+        write(&d, "config.toml", "profiles_dir = \"profiles\"\nm1 = \"default.toml\"\nm2 = \"game.toml\"\n");
+
+        let mut set = ProfileSet::load(&d.join("config.toml")).unwrap();
+        assert_eq!(set.active(), MKey::M1);
+        assert_eq!(set.active_profile().get_binding(crate::protocol::G13Key::G1), Some("ctrl+c"));
+        assert_eq!(set.name(MKey::M2), Some("game.toml"));
+
+        assert!(set.set_active(MKey::M2));
+        assert_eq!(set.active_profile().get_binding(crate::protocol::G13Key::G1), Some("space"));
+
+        // M3 unbound -> no-op switch, stays on M2.
+        assert!(!set.set_active(MKey::M3));
+        assert_eq!(set.active(), MKey::M2);
+        // MR reserved -> no-op.
+        assert!(!set.set_active(MKey::MR));
+    }
+
+    #[test]
+    fn legacy_config_is_single_m1_profile() {
+        let d = tmp("legacy");
+        write(&d, "config.toml", "[keys]\nG1 = \"ctrl+c\"\n");
+        let set = ProfileSet::load(&d.join("config.toml")).unwrap();
+        assert_eq!(set.active_profile().get_binding(crate::protocol::G13Key::G1), Some("ctrl+c"));
+        assert!(set.name(MKey::M2).is_none());
+    }
+
+    #[test]
+    fn missing_m1_is_error() {
+        let d = tmp("missing-m1");
+        write(&d, "config.toml", "profiles_dir = \"profiles\"\nm1 = \"nope.toml\"\n");
+        assert!(ProfileSet::load(&d.join("config.toml")).is_err());
+    }
+
+    #[test]
+    fn available_lists_toml_files() {
+        let d = tmp("available");
+        write(&d.join("profiles"), "default.toml", "[keys]\n");
+        write(&d.join("profiles"), "extra.toml", "[keys]\n");
+        write(&d, "config.toml", "profiles_dir = \"profiles\"\nm1 = \"default.toml\"\n");
+        let set = ProfileSet::load(&d.join("config.toml")).unwrap();
+        let mut avail = set.available();
+        avail.sort();
+        assert_eq!(avail, vec!["default.toml".to_string(), "extra.toml".to_string()]);
+    }
 }
 
 #[cfg(test)]
