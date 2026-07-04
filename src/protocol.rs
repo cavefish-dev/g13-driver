@@ -5,22 +5,34 @@ pub enum G13Key {
     G17, G18, G19, G20, G21, G22,
 }
 
+/// The mode/profile keys above the LCD. M1-M3 select profiles; MR is reserved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MKey {
+    M1,
+    M2,
+    M3,
+    MR,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum G13Event {
     KeyDown(G13Key),
     KeyUp(G13Key),
     JoystickMove { x: u8, y: u8 },
+    MKeyDown(MKey),
+    MKeyUp(MKey),
 }
 
 pub struct ReportParser {
     prev_keys: u32,
     prev_x: u8,
     prev_y: u8,
+    prev_mkeys: u8,
 }
 
 impl ReportParser {
     pub fn new() -> Self {
-        Self { prev_keys: 0, prev_x: 127, prev_y: 127 }
+        Self { prev_keys: 0, prev_x: 127, prev_y: 127, prev_mkeys: 0 }
     }
 
     pub fn parse(&mut self, report: &[u8; 8]) -> Vec<G13Event> {
@@ -51,7 +63,33 @@ impl ReportParser {
             if pressed  & (1 << bit) != 0 { events.push(G13Event::KeyDown(Self::bit_to_key(bit))); }
             if released & (1 << bit) != 0 { events.push(G13Event::KeyUp(Self::bit_to_key(bit))); }
         }
+
+        // M-keys: byte 6 bits 5-7 (M1,M2,M3) and byte 7 bit 0 (MR). Byte 7 bit 7
+        // (heartbeat) and bit 3 (joystick click) are not M-keys. Packed to a nibble.
+        let current_m = (u8::from(report[6] & 0x20 != 0))
+            | (u8::from(report[6] & 0x40 != 0) << 1)
+            | (u8::from(report[6] & 0x80 != 0) << 2)
+            | (u8::from(report[7] & 0x01 != 0) << 3);
+        let m_pressed = current_m & !self.prev_mkeys;
+        let m_released = self.prev_mkeys & !current_m;
+        self.prev_mkeys = current_m;
+        for bit in 0..4u8 {
+            let mkey = Self::bit_to_mkey(bit);
+            if m_pressed & (1 << bit) != 0 { events.push(G13Event::MKeyDown(mkey)); }
+            if m_released & (1 << bit) != 0 { events.push(G13Event::MKeyUp(mkey)); }
+        }
+
         events
+    }
+
+    fn bit_to_mkey(bit: u8) -> MKey {
+        match bit {
+            0 => MKey::M1,
+            1 => MKey::M2,
+            2 => MKey::M3,
+            3 => MKey::MR,
+            _ => unreachable!(),
+        }
     }
 
     fn bit_to_key(bit: u32) -> G13Key {
@@ -163,6 +201,53 @@ mod tests {
         assert_eq!(events.len(), 2);
         assert!(events.contains(&G13Event::KeyDown(G13Key::G1)));
         assert!(events.contains(&G13Event::KeyDown(G13Key::G2)));
+    }
+
+    #[test]
+    fn m1_press_and_release() {
+        let mut p = ReportParser::new();
+        let mut r = idle();
+        r[6] = 0x20; // M1 = byte 6 bit 5
+        assert_eq!(p.parse(&r), vec![G13Event::MKeyDown(MKey::M1)]);
+        assert_eq!(p.parse(&idle()), vec![G13Event::MKeyUp(MKey::M1)]);
+    }
+
+    #[test]
+    fn m2_m3_and_mr_press() {
+        let mut p = ReportParser::new();
+        let mut r = idle();
+        r[6] = 0x40; // M2
+        assert_eq!(p.parse(&r), vec![G13Event::MKeyDown(MKey::M2)]);
+        let mut r = idle();
+        r[6] = 0x80; // M3 (byte 6 bit 7)
+        // transition from M2-held to M3-held: M2 up, M3 down
+        let ev = p.parse(&r);
+        assert!(ev.contains(&G13Event::MKeyUp(MKey::M2)));
+        assert!(ev.contains(&G13Event::MKeyDown(MKey::M3)));
+        let mut r = idle();
+        r[7] = 0x01; // MR = byte 7 bit 0
+        let ev = p.parse(&r);
+        assert!(ev.contains(&G13Event::MKeyUp(MKey::M3)));
+        assert!(ev.contains(&G13Event::MKeyDown(MKey::MR)));
+    }
+
+    #[test]
+    fn byte7_heartbeat_and_click_ignored() {
+        let mut p = ReportParser::new();
+        let mut r = idle();
+        r[7] = 0x88; // bit7 heartbeat + bit3 joystick click — neither is an M-key
+        assert!(p.parse(&r).is_empty());
+    }
+
+    #[test]
+    fn mkey_and_gkey_together() {
+        let mut p = ReportParser::new();
+        let mut r = idle();
+        r[3] = 0b0000_0001; // G1
+        r[6] = 0x20;        // M1
+        let ev = p.parse(&r);
+        assert!(ev.contains(&G13Event::KeyDown(G13Key::G1)));
+        assert!(ev.contains(&G13Event::MKeyDown(MKey::M1)));
     }
 
 }

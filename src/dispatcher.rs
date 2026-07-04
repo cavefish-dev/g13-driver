@@ -21,6 +21,7 @@ impl Dispatcher {
             G13Event::KeyDown(key) => self.handle_key(key)?,
             G13Event::KeyUp(_) => {}
             G13Event::JoystickMove { x, y } => self.handle_joystick(x, y),
+            G13Event::MKeyDown(_) | G13Event::MKeyUp(_) => {} // handled in a later task
         }
         Ok(())
     }

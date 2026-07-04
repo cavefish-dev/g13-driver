@@ -46,6 +46,7 @@ impl DeviceState {
                 self.joy_x = *x;
                 self.joy_y = *y;
             }
+            G13Event::MKeyDown(_) | G13Event::MKeyUp(_) => {} // tracked in a later task
         }
     }
 }
