@@ -1,19 +1,19 @@
 use anyhow::Result;
 use std::sync::{Arc, RwLock};
-use crate::config::{Config, JoystickMode};
+use crate::config::{JoystickMode, ProfileSet};
 use crate::injector::{KeyCombo, KeyInjector};
 use crate::joystick::{HoldAction, JoystickMapper};
-use crate::protocol::{G13Event, G13Key};
+use crate::protocol::{G13Event, G13Key, MKey};
 
 pub struct Dispatcher {
-    config: Arc<RwLock<Config>>,
+    profiles: Arc<RwLock<ProfileSet>>,
     injector: Box<dyn KeyInjector>,
     joystick: JoystickMapper,
 }
 
 impl Dispatcher {
-    pub fn new(config: Arc<RwLock<Config>>, injector: Box<dyn KeyInjector>) -> Self {
-        Self { config, injector, joystick: JoystickMapper::new() }
+    pub fn new(profiles: Arc<RwLock<ProfileSet>>, injector: Box<dyn KeyInjector>) -> Self {
+        Self { profiles, injector, joystick: JoystickMapper::new() }
     }
 
     pub fn handle(&mut self, event: G13Event) -> Result<()> {
@@ -21,15 +21,16 @@ impl Dispatcher {
             G13Event::KeyDown(key) => self.handle_key(key)?,
             G13Event::KeyUp(_) => {}
             G13Event::JoystickMove { x, y } => self.handle_joystick(x, y),
-            G13Event::MKeyDown(_) | G13Event::MKeyUp(_) => {} // handled in a later task
+            G13Event::MKeyDown(m) => self.handle_mkey(m),
+            G13Event::MKeyUp(_) => {}
         }
         Ok(())
     }
 
     fn handle_key(&self, key: G13Key) -> Result<()> {
         let binding = {
-            let cfg = self.config.read().unwrap();
-            cfg.get_binding(key).map(str::to_owned)
+            let set = self.profiles.read().unwrap();
+            set.active_profile().get_binding(key).map(str::to_owned)
         };
         match &binding {
             Some(b) => log::debug!("{key:?} -> {b}"),
@@ -43,11 +44,11 @@ impl Dispatcher {
     }
 
     fn handle_joystick(&mut self, x: u8, y: u8) {
-        // Read joystick config live so hot-reload takes effect. Clone so the
-        // RwLock guard is released before we touch the injector.
+        // Read the active profile's joystick config live; clone so the guard is
+        // dropped before we touch the injector.
         let cfg = {
-            let guard = self.config.read().unwrap();
-            guard.joystick()
+            let set = self.profiles.read().unwrap();
+            set.active_profile().joystick()
                 .filter(|j| j.mode == JoystickMode::Wasd)
                 .cloned()
         };
@@ -56,6 +57,19 @@ impl Dispatcher {
             None => Vec::new(),
         };
         self.apply(actions);
+    }
+
+    /// Switch profile on M1/M2/M3. Release held joystick keys first (a new
+    /// profile may rebind the stick). MR is reserved.
+    fn handle_mkey(&mut self, m: MKey) {
+        if m == MKey::MR { return; }
+        self.release_held();
+        let mut set = self.profiles.write().unwrap();
+        if set.set_active(m) {
+            log::info!("profile -> {}", set.name(m).unwrap_or("?"));
+        } else {
+            log::warn!("no profile bound to {m:?}");
+        }
     }
 
     fn apply(&self, actions: Vec<HoldAction>) {
@@ -82,9 +96,9 @@ impl Dispatcher {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{Config, RawConfig};
+    use crate::config::ProfileSet;
     use crate::injector::Modifier;
-    use crate::protocol::{G13Event, G13Key};
+    use crate::protocol::{G13Event, G13Key, MKey};
     use std::sync::{Arc, Mutex, RwLock};
 
     struct MockInjector {
@@ -121,24 +135,41 @@ mod tests {
         }
     }
 
-    fn make_config(pairs: &[(&str, &str)]) -> Arc<RwLock<Config>> {
-        let keys = pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
-        Arc::new(RwLock::new(Config::from_raw(RawConfig { keys, joystick: None }).unwrap()))
+    fn write(p: &std::path::Path, body: &str) { std::fs::write(p, body).unwrap(); }
+
+    fn tmp(tag: &str) -> std::path::PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static CTR: AtomicU64 = AtomicU64::new(0);
+        let n = CTR.fetch_add(1, Ordering::Relaxed);
+        let d = std::env::temp_dir().join(format!("g13-disp-{tag}-{n}"));
+        let _ = std::fs::remove_dir_all(&d);
+        d
     }
 
-    fn config_with_joystick() -> Arc<RwLock<Config>> {
-        let src = r#"
-[keys]
-[joystick]
-mode = "wasd"
-deadzone = 30
-up = "w"
-down = "s"
-left = "a"
-right = "d"
-"#;
-        let raw: RawConfig = toml::from_str(src).unwrap();
-        Arc::new(RwLock::new(Config::from_raw(raw).unwrap()))
+    fn make_config(pairs: &[(&str, &str)]) -> Arc<RwLock<ProfileSet>> {
+        let d = tmp("single");
+        std::fs::create_dir_all(&d).unwrap();
+        let mut body = String::from("[keys]\n");
+        for (k, v) in pairs { body.push_str(&format!("{k} = \"{v}\"\n")); }
+        write(&d.join("config.toml"), &body);
+        Arc::new(RwLock::new(ProfileSet::load(&d.join("config.toml")).unwrap()))
+    }
+
+    fn config_with_joystick() -> Arc<RwLock<ProfileSet>> {
+        let d = tmp("joy");
+        std::fs::create_dir_all(&d).unwrap();
+        let body = "[keys]\n[joystick]\nmode = \"wasd\"\ndeadzone = 30\nup = \"w\"\ndown = \"s\"\nleft = \"a\"\nright = \"d\"\n";
+        write(&d.join("config.toml"), body);
+        Arc::new(RwLock::new(ProfileSet::load(&d.join("config.toml")).unwrap()))
+    }
+
+    fn profiles_two() -> Arc<RwLock<ProfileSet>> {
+        let d = tmp("two");
+        std::fs::create_dir_all(d.join("profiles")).unwrap();
+        write(&d.join("profiles/default.toml"), "[keys]\nG1 = \"ctrl+c\"\n");
+        write(&d.join("profiles/game.toml"), "[keys]\nG1 = \"space\"\n[joystick]\nup=\"w\"\n");
+        write(&d.join("config.toml"), "profiles_dir=\"profiles\"\nm1=\"default.toml\"\nm2=\"game.toml\"\n");
+        Arc::new(RwLock::new(ProfileSet::load(&d.join("config.toml")).unwrap()))
     }
 
     #[test]
@@ -228,5 +259,27 @@ right = "d"
         let mut got = holds.lock().unwrap().clone();
         got.sort();
         assert_eq!(got, vec!["up:a".to_string(), "up:w".to_string()]);
+    }
+
+    #[test]
+    fn mkey_switches_active_profile() {
+        let (injector, calls) = MockInjector::new();
+        let mut d = Dispatcher::new(profiles_two(), Box::new(injector));
+        d.handle(G13Event::MKeyDown(MKey::M2)).unwrap();
+        d.handle(G13Event::KeyDown(G13Key::G1)).unwrap();
+        assert_eq!(calls.lock().unwrap()[0].key, "space");
+    }
+
+    #[test]
+    fn mkey_switch_releases_held_joystick() {
+        let (injector, holds) = MockInjector::new_with_holds();
+        let mut d = Dispatcher::new(profiles_two(), Box::new(injector));
+        // With M2 (has joystick up=w) active, hold up so a key is held.
+        d.handle(G13Event::MKeyDown(MKey::M2)).unwrap();
+        d.handle(G13Event::JoystickMove { x: 127, y: 0 }).unwrap(); // hold "w"
+        holds.lock().unwrap().clear();
+        // Switch back to M1 -> release_held fires before the switch.
+        d.handle(G13Event::MKeyDown(MKey::M1)).unwrap();
+        assert!(holds.lock().unwrap().iter().any(|s| s == "up:w"));
     }
 }

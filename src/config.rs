@@ -185,6 +185,8 @@ impl ProfileSet {
 
     pub fn active_name(&self) -> Option<&str> { self.name(self.active) }
 
+    pub fn profiles_dir(&self) -> &std::path::Path { &self.profiles_dir }
+
     /// All `.toml` files in the profiles folder (for the GUI browse list).
     pub fn available(&self) -> Vec<String> {
         let mut names = Vec::new();
@@ -198,10 +200,6 @@ impl ProfileSet {
         names
     }
 }
-
-/// Temporary alias so existing consumers keep compiling while the profile
-/// layer is introduced. Removed in the ProfileSet wiring task.
-pub type Config = Profile;
 
 fn parse_g13_key(s: &str) -> Option<G13Key> {
     match s.to_uppercase().as_str() {

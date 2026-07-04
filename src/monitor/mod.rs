@@ -4,14 +4,14 @@ use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::time::Duration;
 use anyhow::Result;
 use eframe::egui;
-use crate::config::Config;
+use crate::config::ProfileSet;
 use crate::device_state::{Connection, DeviceState};
 use crate::dispatcher::Dispatcher;
 use crate::injector::windows::WindowsInjector;
 use crate::protocol::{G13Event, G13Key};
 use crate::runtime;
 
-pub fn run(config: Arc<RwLock<Config>>) -> Result<()> {
+pub fn run(config: Arc<RwLock<ProfileSet>>) -> Result<()> {
     let state = Arc::new(Mutex::new(DeviceState::new()));
     let dry_run = Arc::new(AtomicBool::new(true)); // first launch = Dry-run
 
@@ -52,7 +52,7 @@ const TABS: [(Tab, &str); 5] = [
 ];
 
 pub struct MonitorApp {
-    config: Arc<RwLock<Config>>,
+    profiles: Arc<RwLock<ProfileSet>>,
     state: Arc<Mutex<DeviceState>>,
     dry_run: Arc<AtomicBool>,
     tab: Tab,
@@ -61,11 +61,11 @@ pub struct MonitorApp {
 impl MonitorApp {
     fn new(
         cc: &eframe::CreationContext<'_>,
-        config: Arc<RwLock<Config>>,
+        config: Arc<RwLock<ProfileSet>>,
         state: Arc<Mutex<DeviceState>>,
         dry_run: Arc<AtomicBool>,
     ) -> Self {
-        let app = Self { config, state, dry_run, tab: Tab::Monitor };
+        let app = Self { profiles: config, state, dry_run, tab: Tab::Monitor };
         app.start_consumer(cc.egui_ctx.clone());
         app
     }
@@ -78,7 +78,7 @@ impl MonitorApp {
             Ok(rx) => {
                 self.state.lock().unwrap().connection = Connection::Connected;
                 let injector = Box::new(WindowsInjector::new());
-                let dispatcher = Dispatcher::new(self.config.clone(), injector);
+                let dispatcher = Dispatcher::new(self.profiles.clone(), injector);
                 let state = self.state.clone();
                 let dry_run = self.dry_run.clone();
                 std::thread::spawn(move || consumer_loop(rx, dispatcher, state, dry_run, ctx));
@@ -168,7 +168,8 @@ impl eframe::App for MonitorApp {
         });
 
         egui::TopBottomPanel::bottom("ft").show(ctx, |ui| {
-            let cfg = self.config.read().unwrap();
+            let set = self.profiles.read().unwrap();
+            let cfg = set.active_profile();
             let joy = cfg.joystick()
                 .map(|j| format!("joystick: {:?}, deadzone {}", j.mode, j.deadzone))
                 .unwrap_or_else(|| "joystick: disabled".to_string());
@@ -204,7 +205,8 @@ impl eframe::App for MonitorApp {
 impl MonitorApp {
     /// The live view: physical-layout key grid, with the joystick panel below it.
     fn render_monitor(&self, ui: &mut egui::Ui, snapshot: &DeviceState) {
-        let cfg = self.config.read().unwrap();
+        let set = self.profiles.read().unwrap();
+        let cfg = set.active_profile();
 
         // Deterministic centering: a cell is exactly 62px wide (48 content + 8
         // inner margin + 6 outer margin) with inter-cell spacing zeroed, so a row
@@ -312,7 +314,8 @@ impl MonitorApp {
         ui.heading("Bindings — Default");
         ui.label("Edit what each G-key sends. Planned: click a key to rebind.");
         ui.add_space(8.0);
-        let cfg = self.config.read().unwrap();
+        let set = self.profiles.read().unwrap();
+        let cfg = set.active_profile();
         egui::ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
             for row in ROWS {
                 for &key in row {
