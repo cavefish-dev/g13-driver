@@ -94,6 +94,9 @@ G13 USB --> UsbReader --> ReportParser --> Dispatcher --> KeyInjector(trait) -->
   recoverable, a crashed driver is not. Don't `panic!`/`unwrap()` in the runtime path.
 - **Platform isolation:** all OS-specific code stays behind `#[cfg(...)]` inside
   `src/injector/`. Don't leak Win32 types into `dispatcher`/`config`/`protocol`.
+- **G-key bindings are hold-means-hold** (a G-key holds its bound key/combo while held);
+  multimedia keys are the tap-only exception. `KeyCombo.key` is `Option<String>` so a G-key
+  can hold a modifier alone (e.g. `shift`). See `milestones/finished/hold-means-hold-media-keys.md`.
 - One focused commit per logical change; imperative subject line (matches existing history).
 - `/target` is gitignored. Line endings are CRLF on checkout (Git autocrlf warnings are harmless).
 
