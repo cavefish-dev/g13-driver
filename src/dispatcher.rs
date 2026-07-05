@@ -363,11 +363,15 @@ mod tests {
 
     #[test]
     fn gkey_modifier_only_holds() {
-        let (injector, downs, _ups) = MockInjector::new_combos();
+        let (injector, downs, ups) = MockInjector::new_combos();
         let mut d = Dispatcher::new(make_config(&[("G1", "shift")]), Box::new(injector));
         d.handle(G13Event::KeyDown(G13Key::G1)).unwrap();
         assert!(downs.lock().unwrap()[0].key.is_none());
         assert_eq!(downs.lock().unwrap()[0].modifiers, vec![Modifier::Shift]);
+        // The modifier-only combo is released on KeyUp too.
+        d.handle(G13Event::KeyUp(G13Key::G1)).unwrap();
+        assert!(ups.lock().unwrap()[0].key.is_none());
+        assert_eq!(ups.lock().unwrap()[0].modifiers, vec![Modifier::Shift]);
     }
 
     #[test]
