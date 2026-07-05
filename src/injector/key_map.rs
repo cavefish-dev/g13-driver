@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::collections::HashSet;
 
 pub type VKey = u16;
 
@@ -33,11 +34,27 @@ pub fn build_key_map() -> HashMap<String, VKey> {
         ("ctrl",        0x11), ("control",       0x11),
         ("shift",       0x10), ("alt",           0xA4),
         ("windows",     0x5B), ("win",           0x5B),
+        // Multimedia keys (tap-only).
+        ("playpause",   0xB3),
+        ("nexttrack",   0xB0), ("next",         0xB0),
+        ("prevtrack",   0xB1), ("prev",         0xB1),
+        ("mediastop",   0xB2),
+        ("volup",       0xAF), ("volumeup",     0xAF),
+        ("voldown",     0xAE), ("volumedown",   0xAE),
+        ("mute",        0xAD),
     ];
     for (name, vk) in specials {
         m.insert(name.to_string(), *vk);
     }
     m
+}
+
+/// Names of keys that should tap (down+up on press) rather than hold — the
+/// multimedia keys, where holding is meaningless. Everything else holds.
+pub fn tap_only_keys() -> HashSet<String> {
+    ["playpause", "nexttrack", "next", "prevtrack", "prev", "mediastop",
+     "volup", "volumeup", "voldown", "volumedown", "mute"]
+        .iter().map(|s| s.to_string()).collect()
 }
 
 #[cfg(test)]
@@ -91,5 +108,29 @@ mod tests {
     fn unknown_key_absent() {
         let m = build_key_map();
         assert!(!m.contains_key("xyzzy"));
+    }
+
+    #[test]
+    fn media_keys_present() {
+        let m = build_key_map();
+        assert_eq!(m["playpause"], 0xB3);
+        assert_eq!(m["nexttrack"], 0xB0);
+        assert_eq!(m["next"], 0xB0);
+        assert_eq!(m["prevtrack"], 0xB1);
+        assert_eq!(m["volup"], 0xAF);
+        assert_eq!(m["voldown"], 0xAE);
+        assert_eq!(m["mute"], 0xAD);
+        assert_eq!(m["mediastop"], 0xB2);
+    }
+
+    #[test]
+    fn tap_only_is_media_only() {
+        let t = tap_only_keys();
+        assert!(t.contains("playpause"));
+        assert!(t.contains("volup"));
+        assert!(t.contains("mute"));
+        assert!(!t.contains("a"));
+        assert!(!t.contains("shift"));
+        assert!(!t.contains("f5"));
     }
 }
