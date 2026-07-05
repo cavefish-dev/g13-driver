@@ -24,6 +24,10 @@ pub trait KeyInjector: Send + Sync {
     fn key_down(&self, key: &str) -> Result<()>;
     /// Release a single key previously held with `key_down`.
     fn key_up(&self, key: &str) -> Result<()>;
+    /// Press modifiers + key down and hold them (for hold-means-hold G-keys).
+    fn combo_down(&self, combo: &KeyCombo) -> Result<()>;
+    /// Release a combo previously held with `combo_down`.
+    fn combo_up(&self, combo: &KeyCombo) -> Result<()>;
 }
 
 impl KeyCombo {

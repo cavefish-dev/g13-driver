@@ -104,19 +104,43 @@ mod tests {
     struct MockInjector {
         combos: Arc<Mutex<Vec<KeyCombo>>>,
         holds: Arc<Mutex<Vec<String>>>,
+        combo_downs: Arc<Mutex<Vec<KeyCombo>>>,
+        combo_ups: Arc<Mutex<Vec<KeyCombo>>>,
     }
 
     impl MockInjector {
         fn new() -> (Self, Arc<Mutex<Vec<KeyCombo>>>) {
             let combos = Arc::new(Mutex::new(Vec::new()));
             let holds = Arc::new(Mutex::new(Vec::new()));
-            (Self { combos: combos.clone(), holds }, combos)
+            (Self {
+                combos: combos.clone(),
+                holds,
+                combo_downs: Arc::new(Mutex::new(Vec::new())),
+                combo_ups: Arc::new(Mutex::new(Vec::new())),
+            }, combos)
         }
 
         fn new_with_holds() -> (Self, Arc<Mutex<Vec<String>>>) {
             let combos = Arc::new(Mutex::new(Vec::new()));
             let holds = Arc::new(Mutex::new(Vec::new()));
-            (Self { combos, holds: holds.clone() }, holds)
+            (Self {
+                combos,
+                holds: holds.clone(),
+                combo_downs: Arc::new(Mutex::new(Vec::new())),
+                combo_ups: Arc::new(Mutex::new(Vec::new())),
+            }, holds)
+        }
+
+        fn new_combos() -> (Self, Arc<Mutex<Vec<KeyCombo>>>, Arc<Mutex<Vec<KeyCombo>>>) {
+            let combos = Arc::new(Mutex::new(Vec::new()));
+            let holds = Arc::new(Mutex::new(Vec::new()));
+            let combo_downs = Arc::new(Mutex::new(Vec::new()));
+            let combo_ups = Arc::new(Mutex::new(Vec::new()));
+            (
+                Self { combos, holds, combo_downs: combo_downs.clone(), combo_ups: combo_ups.clone() },
+                combo_downs,
+                combo_ups,
+            )
         }
     }
 
@@ -131,6 +155,14 @@ mod tests {
         }
         fn key_up(&self, key: &str) -> anyhow::Result<()> {
             self.holds.lock().unwrap().push(format!("up:{}", key));
+            Ok(())
+        }
+        fn combo_down(&self, combo: &KeyCombo) -> anyhow::Result<()> {
+            self.combo_downs.lock().unwrap().push(combo.clone());
+            Ok(())
+        }
+        fn combo_up(&self, combo: &KeyCombo) -> anyhow::Result<()> {
+            self.combo_ups.lock().unwrap().push(combo.clone());
             Ok(())
         }
     }

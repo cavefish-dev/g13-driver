@@ -53,6 +53,16 @@ impl WindowsInjector {
         }
         Ok(())
     }
+
+    fn send_batch(inputs: &[INPUT], what: &str) {
+        if inputs.is_empty() { return; }
+        let sent = unsafe {
+            SendInput(inputs.len() as u32, inputs.as_ptr(), std::mem::size_of::<INPUT>() as i32)
+        };
+        if sent == 0 {
+            log::warn!("SendInput returned 0 for {what}");
+        }
+    }
 }
 
 impl KeyInjector for WindowsInjector {
@@ -88,5 +98,31 @@ impl KeyInjector for WindowsInjector {
 
     fn key_up(&self, key: &str) -> Result<()> {
         self.send(key, KEYEVENTF_KEYUP)
+    }
+
+    fn combo_down(&self, combo: &KeyCombo) -> Result<()> {
+        let mut inputs: Vec<INPUT> = Vec::new();
+        for m in &combo.modifiers {
+            inputs.push(Self::make_input(Self::modifier_vk(m), 0));
+        }
+        if let Some(k) = &combo.key {
+            let vk = *self.key_map.get(k).with_context(|| format!("unknown key: {}", k))?;
+            inputs.push(Self::make_input(vk, 0));
+        }
+        Self::send_batch(&inputs, "combo_down");
+        Ok(())
+    }
+
+    fn combo_up(&self, combo: &KeyCombo) -> Result<()> {
+        let mut inputs: Vec<INPUT> = Vec::new();
+        if let Some(k) = &combo.key {
+            let vk = *self.key_map.get(k).with_context(|| format!("unknown key: {}", k))?;
+            inputs.push(Self::make_input(vk, KEYEVENTF_KEYUP));
+        }
+        for m in combo.modifiers.iter().rev() {
+            inputs.push(Self::make_input(Self::modifier_vk(m), KEYEVENTF_KEYUP));
+        }
+        Self::send_batch(&inputs, "combo_up");
+        Ok(())
     }
 }
