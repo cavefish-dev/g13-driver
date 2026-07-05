@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, RwLock};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
@@ -8,9 +8,17 @@ use eframe::egui;
 use crate::config::ProfileSet;
 use crate::device_state::{Connection, DeviceState};
 use crate::dispatcher::Dispatcher;
-use crate::injector::{KeyCombo, windows::WindowsInjector};
+use crate::injector::{KeyCombo, key_map::build_key_map, windows::WindowsInjector};
 use crate::protocol::{G13Event, G13Key, MKey};
 use crate::runtime;
+
+/// A combo is valid for the editor only if it parses AND its key is a known key
+/// (so `ctrl+zzz` is rejected here rather than silently failing at injection).
+fn combo_valid(s: &str, valid_keys: &HashSet<String>) -> bool {
+    KeyCombo::parse(s)
+        .map(|c| valid_keys.contains(&c.key))
+        .unwrap_or(false)
+}
 
 pub fn run(config: Arc<RwLock<ProfileSet>>) -> Result<()> {
     let state = Arc::new(Mutex::new(DeviceState::new()));
@@ -388,6 +396,9 @@ impl MonitorApp {
         let red = egui::Color32::from_rgb(220, 90, 90);
         let dim = egui::Color32::from_gray(110);
 
+        // Valid key names (built once per frame from the injector's key table).
+        let valid_keys: HashSet<String> = build_key_map().into_keys().collect();
+
         egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
             for row in ROWS {
                 for &key in row {
@@ -399,7 +410,7 @@ impl MonitorApp {
                         // Compute validity AFTER the edit so the mark has no one-frame lag.
                         let (mark, color) = if buf.is_empty() {
                             ("—", dim)
-                        } else if KeyCombo::parse(buf).is_ok() {
+                        } else if combo_valid(buf, &valid_keys) {
                             ("ok", green)
                         } else {
                             ("bad", red)
@@ -411,7 +422,7 @@ impl MonitorApp {
         });
 
         ui.add_space(8.0);
-        let all_valid = self.edits.values().all(|b| b.is_empty() || KeyCombo::parse(b).is_ok());
+        let all_valid = self.edits.values().all(|b| b.is_empty() || combo_valid(b, &valid_keys));
         ui.horizontal(|ui| {
             if ui.add_enabled(all_valid, egui::Button::new("Save")).clicked() {
                 let bindings: HashMap<G13Key, String> = self.edits.iter()
