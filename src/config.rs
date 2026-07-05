@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use crate::protocol::{G13Key, MKey};
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct RawConfig {
     #[serde(default)]
     pub keys: HashMap<String, String>,
@@ -12,7 +12,7 @@ pub struct RawConfig {
     pub joystick: Option<RawJoystick>,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct RawJoystick {
     #[serde(default = "default_mode")]
     pub mode: String,
@@ -80,6 +80,35 @@ impl Profile {
 
     pub fn joystick(&self) -> Option<&JoystickConfig> {
         self.joystick.as_ref()
+    }
+
+    pub fn bindings(&self) -> &HashMap<G13Key, String> {
+        &self.key_bindings
+    }
+
+    pub fn set_bindings(&mut self, bindings: HashMap<G13Key, String>) {
+        self.key_bindings = bindings;
+    }
+
+    /// Serialize this profile back to TOML (keys + joystick). Comments in the
+    /// original file are not preserved (the file becomes GUI-managed).
+    pub fn to_toml(&self) -> Result<String> {
+        let keys: HashMap<String, String> = self.key_bindings.iter()
+            .map(|(k, v)| (format!("{k:?}"), v.clone())) // Debug of G13Key is "G1".."G22"
+            .collect();
+        let joystick = self.joystick.as_ref().map(|j| RawJoystick {
+            mode: match j.mode {
+                JoystickMode::Wasd => "wasd".to_string(),
+                JoystickMode::Mouse => "mouse".to_string(),
+            },
+            deadzone: j.deadzone as u16,
+            up: j.up.clone(),
+            down: j.down.clone(),
+            left: j.left.clone(),
+            right: j.right.clone(),
+        });
+        let raw = RawConfig { keys, joystick };
+        toml::to_string(&raw).context("failed to serialize profile")
     }
 }
 
@@ -201,6 +230,35 @@ impl ProfileSet {
         }
         names
     }
+
+    /// The file path backing the active profile (profiles_dir + active filename;
+    /// for a legacy single-profile config that resolves to the config file).
+    pub fn active_path(&self) -> PathBuf {
+        let name = self.active_name().unwrap_or("config.toml");
+        self.profiles_dir.join(name)
+    }
+
+    fn active_profile_mut(&mut self) -> &mut Profile {
+        // Invariant: `active` points at a populated slot (or M1).
+        if self.active == MKey::M2 {
+            if let Some(p) = self.m2.as_mut() { return p; }
+        } else if self.active == MKey::M3 {
+            if let Some(p) = self.m3.as_mut() { return p; }
+        }
+        &mut self.m1
+    }
+
+    /// Replace the active profile's key bindings (joystick untouched) and write
+    /// the profile file. The watcher will reload the identical content.
+    pub fn save_active_bindings(&mut self, bindings: HashMap<G13Key, String>) -> Result<()> {
+        let path = self.active_path();
+        let profile = self.active_profile_mut();
+        profile.set_bindings(bindings);
+        let toml = profile.to_toml()?;
+        std::fs::write(&path, toml)
+            .with_context(|| format!("failed to write {}", path.display()))?;
+        Ok(())
+    }
 }
 
 fn parse_g13_key(s: &str) -> Option<G13Key> {
@@ -243,6 +301,8 @@ fn parse_joystick(rj: RawJoystick) -> Result<JoystickConfig> {
 mod profileset_tests {
     use super::*;
     use crate::protocol::MKey;
+    use crate::protocol::G13Key;
+    use std::collections::HashMap;
 
     fn write(dir: &std::path::Path, name: &str, body: &str) {
         std::fs::write(dir.join(name), body).unwrap();
@@ -304,6 +364,48 @@ mod profileset_tests {
         let mut avail = set.available();
         avail.sort();
         assert_eq!(avail, vec!["default.toml".to_string(), "extra.toml".to_string()]);
+    }
+
+    #[test]
+    fn profile_to_toml_round_trips() {
+        // A profile with keys + joystick serializes and reloads identically.
+        let src = "[keys]\nG1 = \"ctrl+c\"\nG5 = \"f5\"\n[joystick]\nmode = \"wasd\"\ndeadzone = 20\nup = \"w\"\n";
+        let raw: RawConfig = toml::from_str(src).unwrap();
+        let p = Profile::from_raw(raw).unwrap();
+        let toml = p.to_toml().unwrap();
+        let reloaded = Profile::from_raw(toml::from_str(&toml).unwrap()).unwrap();
+        assert_eq!(reloaded.get_binding(G13Key::G1), Some("ctrl+c"));
+        assert_eq!(reloaded.get_binding(G13Key::G5), Some("f5"));
+        let j = reloaded.joystick().expect("joystick preserved");
+        assert_eq!(j.deadzone, 20);
+        assert_eq!(j.up.as_deref(), Some("w"));
+    }
+
+    #[test]
+    fn save_active_bindings_writes_and_preserves_others() {
+        let d = tmp("save");
+        write(&d.join("profiles"), "default.toml", "[keys]\nG1 = \"ctrl+c\"\n[joystick]\nup = \"w\"\n");
+        write(&d.join("profiles"), "game.toml", "[keys]\nG1 = \"space\"\n");
+        write(&d, "config.toml", "profiles_dir = \"profiles\"\nm1 = \"default.toml\"\nm2 = \"game.toml\"\n");
+        let mut set = ProfileSet::load(&d.join("config.toml")).unwrap();
+
+        // Edit M1 (active): G1 -> ctrl+a, add G2 -> f1.
+        let mut b = HashMap::new();
+        b.insert(G13Key::G1, "ctrl+a".to_string());
+        b.insert(G13Key::G2, "f1".to_string());
+        set.save_active_bindings(b).unwrap();
+
+        // Fresh load from disk reflects the change; joystick preserved; game untouched.
+        let reloaded = ProfileSet::load(&d.join("config.toml")).unwrap();
+        assert_eq!(reloaded.active_profile().get_binding(G13Key::G1), Some("ctrl+a"));
+        assert_eq!(reloaded.active_profile().get_binding(G13Key::G2), Some("f1"));
+        assert!(reloaded.active_profile().joystick().is_some(), "joystick preserved");
+        // M2 file untouched.
+        let game = std::fs::read_to_string(d.join("profiles/game.toml")).unwrap();
+        assert!(game.contains("space"));
+        // Manifest untouched.
+        let manifest = std::fs::read_to_string(d.join("config.toml")).unwrap();
+        assert!(manifest.contains("m1 = \"default.toml\""));
     }
 }
 
