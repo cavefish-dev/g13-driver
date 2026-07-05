@@ -7,7 +7,7 @@ use anyhow::{bail, Result};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KeyCombo {
     pub modifiers: Vec<Modifier>,
-    pub key: String,
+    pub key: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -29,12 +29,14 @@ pub trait KeyInjector: Send + Sync {
 impl KeyCombo {
     pub fn parse(s: &str) -> Result<Self> {
         let lower = s.to_lowercase();
-        let parts: Vec<&str> = lower.split('+').map(str::trim).collect();
         let mut modifiers = Vec::new();
         let mut key: Option<String> = None;
 
-        for part in &parts {
-            match *part {
+        for part in lower.split('+').map(str::trim) {
+            if part.is_empty() {
+                continue; // tolerate trailing/double '+'
+            }
+            match part {
                 "ctrl" | "control" => modifiers.push(Modifier::Ctrl),
                 "shift"            => modifiers.push(Modifier::Shift),
                 "alt"              => modifiers.push(Modifier::Alt),
@@ -48,7 +50,9 @@ impl KeyCombo {
             }
         }
 
-        let key = key.ok_or_else(|| anyhow::anyhow!("no key in combo: {}", s))?;
+        if key.is_none() && modifiers.is_empty() {
+            bail!("empty combo: {}", s);
+        }
         Ok(Self { modifiers, key })
     }
 }
@@ -60,21 +64,21 @@ mod tests {
     #[test]
     fn parse_single_key() {
         let c = KeyCombo::parse("f5").unwrap();
-        assert_eq!(c.key, "f5");
+        assert_eq!(c.key.as_deref(), Some("f5"));
         assert!(c.modifiers.is_empty());
     }
 
     #[test]
     fn parse_ctrl_c() {
         let c = KeyCombo::parse("ctrl+c").unwrap();
-        assert_eq!(c.key, "c");
+        assert_eq!(c.key.as_deref(), Some("c"));
         assert_eq!(c.modifiers, vec![Modifier::Ctrl]);
     }
 
     #[test]
     fn parse_shift_ctrl_esc() {
         let c = KeyCombo::parse("shift+ctrl+esc").unwrap();
-        assert_eq!(c.key, "esc");
+        assert_eq!(c.key.as_deref(), Some("esc"));
         assert!(c.modifiers.contains(&Modifier::Ctrl));
         assert!(c.modifiers.contains(&Modifier::Shift));
     }
@@ -82,19 +86,35 @@ mod tests {
     #[test]
     fn parse_is_case_insensitive() {
         let c = KeyCombo::parse("CTRL+C").unwrap();
-        assert_eq!(c.key, "c");
+        assert_eq!(c.key.as_deref(), Some("c"));
         assert_eq!(c.modifiers, vec![Modifier::Ctrl]);
     }
 
     #[test]
     fn parse_windows_key() {
         let c = KeyCombo::parse("windows+d").unwrap();
-        assert_eq!(c.key, "d");
+        assert_eq!(c.key.as_deref(), Some("d"));
         assert_eq!(c.modifiers, vec![Modifier::Windows]);
     }
 
     #[test]
-    fn parse_no_key_is_error() {
-        assert!(KeyCombo::parse("ctrl+shift").is_err());
+    fn parse_modifier_only_is_ok() {
+        let c = KeyCombo::parse("ctrl+shift").unwrap();
+        assert!(c.key.is_none());
+        assert_eq!(c.modifiers, vec![Modifier::Ctrl, Modifier::Shift]);
+        let c = KeyCombo::parse("shift").unwrap();
+        assert!(c.key.is_none());
+        assert_eq!(c.modifiers, vec![Modifier::Shift]);
+    }
+
+    #[test]
+    fn parse_empty_is_error() {
+        assert!(KeyCombo::parse("").is_err());
+        assert!(KeyCombo::parse("+").is_err());
+    }
+
+    #[test]
+    fn parse_two_keys_is_error() {
+        assert!(KeyCombo::parse("a+b").is_err());
     }
 }

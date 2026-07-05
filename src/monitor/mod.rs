@@ -15,9 +15,13 @@ use crate::runtime;
 /// A combo is valid for the editor only if it parses AND its key is a known key
 /// (so `ctrl+zzz` is rejected here rather than silently failing at injection).
 fn combo_valid(s: &str, valid_keys: &HashSet<String>) -> bool {
-    KeyCombo::parse(s)
-        .map(|c| valid_keys.contains(&c.key))
-        .unwrap_or(false)
+    match KeyCombo::parse(s) {
+        Ok(c) => match &c.key {
+            Some(k) => valid_keys.contains(k),
+            None => true, // modifier-only combo (e.g. "shift")
+        },
+        Err(_) => false,
+    }
 }
 
 pub fn run(config: Arc<RwLock<ProfileSet>>) -> Result<()> {
@@ -386,10 +390,11 @@ impl MonitorApp {
             Some(n) => ui.label(format!("Editing profile: {n}")),
             None => ui.label("No profile loaded"),
         };
-        ui.weak("Combo = optional modifiers (ctrl / shift / alt / win) + one key.  \
+        ui.weak("Combo = optional modifiers (ctrl / shift / alt / win) + one key, held while \
+                 the G-key is held. Modifiers alone are allowed (e.g. shift, ctrl+shift). \
                  Keys: a-z, 0-9, f1-f24, enter, esc, space, tab, arrows, home/end, \
-                 pageup/pagedown, insert/delete.  Examples: ctrl+c, ctrl+shift+z, win+d.  \
-                 Empty = unmapped.");
+                 pageup/pagedown, insert/delete, and media: playpause, nexttrack, prevtrack, \
+                 volup, voldown, mute (media keys tap). Empty = unmapped.");
         ui.add_space(6.0);
 
         let green = egui::Color32::from_rgb(127, 224, 160);

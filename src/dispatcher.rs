@@ -182,7 +182,7 @@ mod tests {
 
         let calls = calls.lock().unwrap();
         assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].key, "c");
+        assert_eq!(calls[0].key.as_deref(), Some("c"));
         assert_eq!(calls[0].modifiers, vec![Modifier::Ctrl]);
     }
 
@@ -219,7 +219,7 @@ mod tests {
 
         let calls = calls.lock().unwrap();
         assert_eq!(calls.len(), 2);
-        assert_eq!(calls[1].key, "f5");
+        assert_eq!(calls[1].key.as_deref(), Some("f5"));
         assert!(calls[1].modifiers.is_empty());
     }
 
@@ -267,7 +267,7 @@ mod tests {
         let mut d = Dispatcher::new(profiles_two(), Box::new(injector));
         d.handle(G13Event::MKeyDown(MKey::M2)).unwrap();
         d.handle(G13Event::KeyDown(G13Key::G1)).unwrap();
-        assert_eq!(calls.lock().unwrap()[0].key, "space");
+        assert_eq!(calls.lock().unwrap()[0].key.as_deref(), Some("space"));
     }
 
     #[test]

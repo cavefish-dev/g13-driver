@@ -57,25 +57,24 @@ impl WindowsInjector {
 
 impl KeyInjector for WindowsInjector {
     fn press(&self, combo: &KeyCombo) -> Result<()> {
-        let vk = *self.key_map.get(&combo.key)
-            .with_context(|| format!("unknown key: {}", combo.key))?;
+        let vk = match &combo.key {
+            Some(k) => Some(*self.key_map.get(k)
+                .with_context(|| format!("unknown key: {}", k))?),
+            None => None,
+        };
 
         let mut inputs: Vec<INPUT> = Vec::new();
         for m in &combo.modifiers {
             inputs.push(Self::make_input(Self::modifier_vk(m), 0));
         }
-        inputs.push(Self::make_input(vk, 0));
-        inputs.push(Self::make_input(vk, KEYEVENTF_KEYUP));
+        if let Some(vk) = vk { inputs.push(Self::make_input(vk, 0)); }
+        if let Some(vk) = vk { inputs.push(Self::make_input(vk, KEYEVENTF_KEYUP)); }
         for m in combo.modifiers.iter().rev() {
             inputs.push(Self::make_input(Self::modifier_vk(m), KEYEVENTF_KEYUP));
         }
 
         let sent = unsafe {
-            SendInput(
-                inputs.len() as u32,
-                inputs.as_ptr(),
-                std::mem::size_of::<INPUT>() as i32,
-            )
+            SendInput(inputs.len() as u32, inputs.as_ptr(), std::mem::size_of::<INPUT>() as i32)
         };
         if sent == 0 {
             log::warn!("SendInput returned 0 for combo {:?}", combo);
