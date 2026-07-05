@@ -391,10 +391,10 @@ impl MonitorApp {
             None => ui.label("No profile loaded"),
         };
         ui.weak("Combo = optional modifiers (ctrl / shift / alt / win) + one key, held while \
-                 the G-key is held. Modifiers alone are allowed (e.g. shift, ctrl+shift). \
-                 Keys: a-z, 0-9, f1-f24, enter, esc, space, tab, arrows, home/end, \
-                 pageup/pagedown, insert/delete, and media: playpause, nexttrack, prevtrack, \
-                 volup, voldown, mute (media keys tap). Empty = unmapped.");
+                 the G-key is held. Examples: ctrl+c, ctrl+shift+z, win+d. Modifiers alone are \
+                 allowed (e.g. shift, ctrl+shift). Keys: a-z, 0-9, f1-f24, enter, esc, space, \
+                 tab, arrows, home/end, pageup/pagedown, insert/delete, and media: playpause, \
+                 nexttrack, prevtrack, volup, voldown, mute (media keys tap). Empty = unmapped.");
         ui.add_space(6.0);
 
         let green = egui::Color32::from_rgb(127, 224, 160);
