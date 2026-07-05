@@ -233,6 +233,10 @@ impl ProfileSet {
 
     /// The file path backing the active profile (profiles_dir + active filename;
     /// for a legacy single-profile config that resolves to the config file).
+    ///
+    /// Relies on the load invariant: in legacy mode `profiles_dir` is the config
+    /// file's directory and the M1 name is the config filename, so this joins
+    /// back to the config file itself.
     pub fn active_path(&self) -> PathBuf {
         let name = self.active_name().unwrap_or("config.toml");
         self.profiles_dir.join(name)
