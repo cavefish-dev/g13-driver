@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
@@ -7,7 +8,7 @@ use eframe::egui;
 use crate::config::ProfileSet;
 use crate::device_state::{Connection, DeviceState};
 use crate::dispatcher::Dispatcher;
-use crate::injector::windows::WindowsInjector;
+use crate::injector::{KeyCombo, windows::WindowsInjector};
 use crate::protocol::{G13Event, G13Key, MKey};
 use crate::runtime;
 
@@ -56,6 +57,9 @@ pub struct MonitorApp {
     state: Arc<Mutex<DeviceState>>,
     dry_run: Arc<AtomicBool>,
     tab: Tab,
+    edits: HashMap<G13Key, String>,
+    edits_for: Option<String>,
+    save_status: Option<String>,
 }
 
 impl MonitorApp {
@@ -65,7 +69,15 @@ impl MonitorApp {
         state: Arc<Mutex<DeviceState>>,
         dry_run: Arc<AtomicBool>,
     ) -> Self {
-        let app = Self { profiles, state, dry_run, tab: Tab::Monitor };
+        let app = Self {
+            profiles,
+            state,
+            dry_run,
+            tab: Tab::Monitor,
+            edits: HashMap::new(),
+            edits_for: None,
+            save_status: None,
+        };
         app.start_consumer(cc.egui_ctx.clone());
         app
     }
@@ -346,29 +358,84 @@ impl MonitorApp {
         ui.weak("(assigning files to slots and editing bindings are planned)");
     }
 
-    fn render_bindings(&self, ui: &mut egui::Ui) {
-        ui.heading("Bindings — Default");
-        ui.label("Edit what each G-key sends. Planned: click a key to rebind.");
-        ui.add_space(8.0);
-        let set = self.profiles.read().unwrap();
-        let cfg = set.active_profile();
-        egui::ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
+    fn render_bindings(&mut self, ui: &mut egui::Ui) {
+        // Which profile are we editing? Reload buffers when it changes.
+        let active_name = self.profiles.read().unwrap().active_name().map(String::from);
+        if self.edits_for != active_name {
+            let set = self.profiles.read().unwrap();
+            let profile = set.active_profile();
+            let bound = profile.bindings();
+            self.edits = ROWS.iter().flat_map(|row| row.iter())
+                .map(|&k| (k, bound.get(&k).cloned().unwrap_or_default()))
+                .collect();
+            drop(set);
+            self.edits_for = active_name.clone();
+            self.save_status = None;
+        }
+
+        ui.heading("Bindings");
+        match &active_name {
+            Some(n) => ui.label(format!("Editing profile: {n}")),
+            None => ui.label("No profile loaded"),
+        };
+        ui.weak("Combo = optional modifiers (ctrl / shift / alt / win) + one key.  \
+                 Keys: a-z, 0-9, f1-f24, enter, esc, space, tab, arrows, home/end, \
+                 pageup/pagedown, insert/delete.  Examples: ctrl+c, ctrl+shift+z, win+d.  \
+                 Empty = unmapped.");
+        ui.add_space(6.0);
+
+        let green = egui::Color32::from_rgb(127, 224, 160);
+        let red = egui::Color32::from_rgb(220, 90, 90);
+        let dim = egui::Color32::from_gray(110);
+
+        egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
             for row in ROWS {
                 for &key in row {
-                    let binding = cfg.get_binding(key).unwrap_or("—");
+                    let buf = self.edits.entry(key).or_default();
                     ui.horizontal(|ui| {
                         ui.monospace(format!("{key:?}"));
-                        ui.add_space(8.0);
-                        ui.label(binding);
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            let _ = ui.button("Edit");
-                        });
+                        ui.add_space(6.0);
+                        ui.add(egui::TextEdit::singleline(buf).desired_width(160.0));
+                        // Compute validity AFTER the edit so the mark has no one-frame lag.
+                        let (mark, color) = if buf.is_empty() {
+                            ("—", dim)
+                        } else if KeyCombo::parse(buf).is_ok() {
+                            ("ok", green)
+                        } else {
+                            ("bad", red)
+                        };
+                        ui.colored_label(color, mark);
                     });
                 }
             }
         });
-        ui.add_space(6.0);
-        ui.weak("(placeholder — Edit buttons are inert)");
+
+        ui.add_space(8.0);
+        let all_valid = self.edits.values().all(|b| b.is_empty() || KeyCombo::parse(b).is_ok());
+        ui.horizontal(|ui| {
+            if ui.add_enabled(all_valid, egui::Button::new("Save")).clicked() {
+                let bindings: HashMap<G13Key, String> = self.edits.iter()
+                    .filter(|(_, v)| !v.is_empty())
+                    .map(|(k, v)| (*k, v.clone()))
+                    .collect();
+                match self.profiles.write().unwrap().save_active_bindings(bindings) {
+                    Ok(()) => self.save_status = Some("saved".to_string()),
+                    Err(e) => {
+                        log::warn!("save failed: {e:#}");
+                        self.save_status = Some(format!("save failed: {e:#}"));
+                    }
+                }
+            }
+            if ui.button("Revert").clicked() {
+                self.edits_for = None; // forces a reload from the profile next frame
+            }
+            if let Some(s) = &self.save_status {
+                ui.label(s);
+            }
+        });
+        if !all_valid {
+            ui.colored_label(red, "Fix the invalid (bad) combos before saving.");
+        }
     }
 
     fn render_lcd(&self, ui: &mut egui::Ui) {
