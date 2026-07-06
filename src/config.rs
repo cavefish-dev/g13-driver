@@ -278,6 +278,9 @@ fn parse_g13_key(s: &str) -> Option<G13Key> {
         "G17" => Some(G13Key::G17), "G18" => Some(G13Key::G18),
         "G19" => Some(G13Key::G19), "G20" => Some(G13Key::G20),
         "G21" => Some(G13Key::G21), "G22" => Some(G13Key::G22),
+        "BTN1"  => Some(G13Key::Btn1),
+        "BTN2"  => Some(G13Key::Btn2),
+        "STICK" => Some(G13Key::Stick),
         _ => None,
     }
 }
@@ -510,6 +513,27 @@ deadzone = 10
     fn key_names_are_case_insensitive() {
         let config = Profile::from_raw(raw(&[("g1", "ctrl+c")])).unwrap();
         assert_eq!(config.get_binding(G13Key::G1), Some("ctrl+c"));
+    }
+
+    #[test]
+    fn parses_thumb_button_names() {
+        use crate::protocol::G13Key;
+        let config = Profile::from_raw(raw(&[
+            ("BTN1", "a"), ("btn2", "b"), ("Stick", "space"),
+        ])).unwrap();
+        assert_eq!(config.get_binding(G13Key::Btn1), Some("a"));
+        assert_eq!(config.get_binding(G13Key::Btn2), Some("b"));
+        assert_eq!(config.get_binding(G13Key::Stick), Some("space"));
+    }
+
+    #[test]
+    fn thumb_binding_round_trips_through_toml() {
+        use crate::protocol::G13Key;
+        let p = Profile::from_raw(raw(&[("BTN1", "ctrl+c"), ("STICK", "enter")])).unwrap();
+        let toml = p.to_toml().unwrap();
+        let reloaded = Profile::from_raw(toml::from_str(&toml).unwrap()).unwrap();
+        assert_eq!(reloaded.get_binding(G13Key::Btn1), Some("ctrl+c"));
+        assert_eq!(reloaded.get_binding(G13Key::Stick), Some("enter"));
     }
 
     #[test]
