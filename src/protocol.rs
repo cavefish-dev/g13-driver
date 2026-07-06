@@ -3,6 +3,8 @@ pub enum G13Key {
     G1,  G2,  G3,  G4,  G5,  G6,  G7,  G8,
     G9,  G10, G11, G12, G13, G14, G15, G16,
     G17, G18, G19, G20, G21, G22,
+    // Thumb inputs (byte 7): the two buttons next to the joystick + the stick click.
+    Btn1, Btn2, Stick,
 }
 
 /// The mode/profile keys above the LCD. M1-M3 select profiles; MR is reserved.
@@ -28,11 +30,12 @@ pub struct ReportParser {
     prev_x: u8,
     prev_y: u8,
     prev_mkeys: u8,
+    prev_buttons: u8,
 }
 
 impl ReportParser {
     pub fn new() -> Self {
-        Self { prev_keys: 0, prev_x: 127, prev_y: 127, prev_mkeys: 0 }
+        Self { prev_keys: 0, prev_x: 127, prev_y: 127, prev_mkeys: 0, prev_buttons: 0 }
     }
 
     pub fn parse(&mut self, report: &[u8; 8]) -> Vec<G13Event> {
@@ -79,6 +82,20 @@ impl ReportParser {
             if m_released & (1 << bit) != 0 { events.push(G13Event::MKeyUp(mkey)); }
         }
 
+        // Thumb buttons: byte 7 bit 1 = Btn1, bit 2 = Btn2, bit 3 = Stick (joystick
+        // click). Ordinary KeyDown/KeyUp so they reuse the G-key binding path.
+        let current_b = (u8::from(report[7] & 0x02 != 0))
+            | (u8::from(report[7] & 0x04 != 0) << 1)
+            | (u8::from(report[7] & 0x08 != 0) << 2);
+        let b_pressed = current_b & !self.prev_buttons;
+        let b_released = self.prev_buttons & !current_b;
+        self.prev_buttons = current_b;
+        for bit in 0..3u8 {
+            let key = Self::bit_to_button(bit);
+            if b_pressed  & (1 << bit) != 0 { events.push(G13Event::KeyDown(key)); }
+            if b_released & (1 << bit) != 0 { events.push(G13Event::KeyUp(key)); }
+        }
+
         events
     }
 
@@ -88,6 +105,15 @@ impl ReportParser {
             1 => MKey::M2,
             2 => MKey::M3,
             3 => MKey::MR,
+            _ => unreachable!(),
+        }
+    }
+
+    fn bit_to_button(bit: u8) -> G13Key {
+        match bit {
+            0 => G13Key::Btn1,
+            1 => G13Key::Btn2,
+            2 => G13Key::Stick,
             _ => unreachable!(),
         }
     }
@@ -232,11 +258,15 @@ mod tests {
     }
 
     #[test]
-    fn byte7_heartbeat_and_click_ignored() {
+    fn byte7_heartbeat_ignored_click_is_stick() {
         let mut p = ReportParser::new();
         let mut r = idle();
-        r[7] = 0x88; // bit7 heartbeat + bit3 joystick click — neither is an M-key
-        assert!(p.parse(&r).is_empty());
+        r[7] = 0x88; // bit7 heartbeat (ignored) + bit3 joystick click = Stick
+        // Bit 7 heartbeat produces no event; bit 3 (Stick) now produces KeyDown(Stick).
+        // No M-key events should be emitted.
+        let ev = p.parse(&r);
+        assert!(ev.contains(&G13Event::KeyDown(G13Key::Stick)));
+        assert!(!ev.iter().any(|e| matches!(e, G13Event::MKeyDown(_) | G13Event::MKeyUp(_))));
     }
 
     #[test]
@@ -248,6 +278,51 @@ mod tests {
         let ev = p.parse(&r);
         assert!(ev.contains(&G13Event::KeyDown(G13Key::G1)));
         assert!(ev.contains(&G13Event::MKeyDown(MKey::M1)));
+    }
+
+    #[test]
+    fn thumb_btn1_press_and_release() {
+        let mut p = ReportParser::new();
+        let mut r = idle();
+        r[7] = 0x02; // Btn1 = byte 7 bit 1
+        assert_eq!(p.parse(&r), vec![G13Event::KeyDown(G13Key::Btn1)]);
+        assert_eq!(p.parse(&idle()), vec![G13Event::KeyUp(G13Key::Btn1)]);
+    }
+
+    #[test]
+    fn thumb_btn2_and_stick() {
+        let mut p = ReportParser::new();
+        let mut r = idle();
+        r[7] = 0x04; // Btn2 = bit 2
+        assert_eq!(p.parse(&r), vec![G13Event::KeyDown(G13Key::Btn2)]);
+        let mut r = idle();
+        r[7] = 0x08; // Stick (joystick click) = bit 3
+        let ev = p.parse(&r);
+        assert!(ev.contains(&G13Event::KeyUp(G13Key::Btn2)));
+        assert!(ev.contains(&G13Event::KeyDown(G13Key::Stick)));
+    }
+
+    #[test]
+    fn thumb_ignores_mr_and_heartbeat() {
+        let mut p = ReportParser::new();
+        let mut r = idle();
+        r[7] = 0x81; // bit 0 = MR (an M-key, not a thumb button) + bit 7 heartbeat
+        // No thumb KeyDown/KeyUp should be emitted (MR is handled by the M-key decode).
+        let ev = p.parse(&r);
+        assert!(!ev.iter().any(|e| matches!(e,
+            G13Event::KeyDown(G13Key::Btn1 | G13Key::Btn2 | G13Key::Stick)
+            | G13Event::KeyUp(G13Key::Btn1 | G13Key::Btn2 | G13Key::Stick))));
+    }
+
+    #[test]
+    fn thumb_and_gkey_together() {
+        let mut p = ReportParser::new();
+        let mut r = idle();
+        r[3] = 0b0000_0001; // G1
+        r[7] = 0x02;        // Btn1
+        let ev = p.parse(&r);
+        assert!(ev.contains(&G13Event::KeyDown(G13Key::G1)));
+        assert!(ev.contains(&G13Event::KeyDown(G13Key::Btn1)));
     }
 
 }
