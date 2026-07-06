@@ -24,6 +24,31 @@ fn combo_valid(s: &str, valid_keys: &HashSet<String>) -> bool {
     }
 }
 
+fn render_binding_row(
+    ui: &mut egui::Ui,
+    key: G13Key,
+    edits: &mut HashMap<G13Key, String>,
+    valid_keys: &HashSet<String>,
+) {
+    let green = egui::Color32::from_rgb(127, 224, 160);
+    let red = egui::Color32::from_rgb(220, 90, 90);
+    let dim = egui::Color32::from_gray(110);
+    let buf = edits.entry(key).or_default();
+    ui.horizontal(|ui| {
+        ui.monospace(format!("{key:?}"));
+        ui.add_space(6.0);
+        ui.add(egui::TextEdit::singleline(buf).desired_width(160.0));
+        let (mark, color) = if buf.is_empty() {
+            ("—", dim)
+        } else if combo_valid(buf, valid_keys) {
+            ("ok", green)
+        } else {
+            ("bad", red)
+        };
+        ui.colored_label(color, mark);
+    });
+}
+
 pub fn run(config: Arc<RwLock<ProfileSet>>) -> Result<()> {
     let state = Arc::new(Mutex::new(DeviceState::new()));
     let dry_run = Arc::new(AtomicBool::new(true)); // first launch = Dry-run
@@ -169,6 +194,9 @@ const ROWS: [&[G13Key]; 4] = [
     &[G13Key::G15, G13Key::G16, G13Key::G17, G13Key::G18, G13Key::G19],
     &[G13Key::G20, G13Key::G21, G13Key::G22],
 ];
+
+/// The three bindable thumb inputs (byte 7): two side buttons + the joystick click.
+const THUMB: [G13Key; 3] = [G13Key::Btn1, G13Key::Btn2, G13Key::Stick];
 
 impl eframe::App for MonitorApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
@@ -324,6 +352,15 @@ impl MonitorApp {
                         ui.colored_label(if on { hot } else { dim }, label);
                     }
                 });
+                ui.horizontal(|ui| {
+                    ui.label("Thumb:");
+                    let hot = egui::Color32::from_rgb(127, 224, 160);
+                    let dim = egui::Color32::from_gray(140);
+                    for (key, label) in [(G13Key::Btn1, "BTN1"), (G13Key::Btn2, "BTN2"), (G13Key::Stick, "STICK")] {
+                        let on = snapshot.pressed.contains(&key);
+                        ui.colored_label(if on { hot } else { dim }, label);
+                    }
+                });
             });
         });
     }
@@ -377,7 +414,7 @@ impl MonitorApp {
             let set = self.profiles.read().unwrap();
             let profile = set.active_profile();
             let bound = profile.bindings();
-            self.edits = ROWS.iter().flat_map(|row| row.iter())
+            self.edits = ROWS.iter().flat_map(|row| row.iter()).chain(THUMB.iter())
                 .map(|&k| (k, bound.get(&k).cloned().unwrap_or_default()))
                 .collect();
             drop(set);
@@ -397,32 +434,20 @@ impl MonitorApp {
                  nexttrack, prevtrack, volup, voldown, mute (media keys tap). Empty = unmapped.");
         ui.add_space(6.0);
 
-        let green = egui::Color32::from_rgb(127, 224, 160);
         let red = egui::Color32::from_rgb(220, 90, 90);
-        let dim = egui::Color32::from_gray(110);
 
         // Valid key names (built once per frame from the injector's key table).
         let valid_keys: HashSet<String> = build_key_map().into_keys().collect();
 
         egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
-            for row in ROWS {
-                for &key in row {
-                    let buf = self.edits.entry(key).or_default();
-                    ui.horizontal(|ui| {
-                        ui.monospace(format!("{key:?}"));
-                        ui.add_space(6.0);
-                        ui.add(egui::TextEdit::singleline(buf).desired_width(160.0));
-                        // Compute validity AFTER the edit so the mark has no one-frame lag.
-                        let (mark, color) = if buf.is_empty() {
-                            ("—", dim)
-                        } else if combo_valid(buf, &valid_keys) {
-                            ("ok", green)
-                        } else {
-                            ("bad", red)
-                        };
-                        ui.colored_label(color, mark);
-                    });
-                }
+            for &key in ROWS.iter().flat_map(|row| row.iter()) {
+                render_binding_row(ui, key, &mut self.edits, &valid_keys);
+            }
+            ui.add_space(6.0);
+            ui.separator();
+            ui.label("Thumb buttons");
+            for &key in THUMB.iter() {
+                render_binding_row(ui, key, &mut self.edits, &valid_keys);
             }
         });
 
