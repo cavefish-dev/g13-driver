@@ -28,12 +28,14 @@ fn render_binding_row(
     ui: &mut egui::Ui,
     key: G13Key,
     edits: &mut HashMap<G13Key, String>,
+    repeat_edits: &mut HashMap<G13Key, bool>,
     valid_keys: &HashSet<String>,
 ) {
     let green = egui::Color32::from_rgb(127, 224, 160);
     let red = egui::Color32::from_rgb(220, 90, 90);
     let dim = egui::Color32::from_gray(110);
     let buf = edits.entry(key).or_default();
+    let rep = repeat_edits.entry(key).or_default();
     ui.horizontal(|ui| {
         ui.monospace(format!("{key:?}"));
         ui.add_space(6.0);
@@ -46,6 +48,8 @@ fn render_binding_row(
             ("bad", red)
         };
         ui.colored_label(color, mark);
+        ui.add_space(6.0);
+        ui.checkbox(rep, "repeat");
     });
 }
 
@@ -95,6 +99,7 @@ pub struct MonitorApp {
     dry_run: Arc<AtomicBool>,
     tab: Tab,
     edits: HashMap<G13Key, String>,
+    repeat_edits: HashMap<G13Key, bool>,
     edits_for: Option<String>,
     save_status: Option<String>,
 }
@@ -112,6 +117,7 @@ impl MonitorApp {
             dry_run,
             tab: Tab::Monitor,
             edits: HashMap::new(),
+            repeat_edits: HashMap::new(),
             edits_for: None,
             save_status: None,
         };
@@ -419,6 +425,9 @@ impl MonitorApp {
             self.edits = ROWS.iter().flat_map(|row| row.iter()).chain(THUMB.iter())
                 .map(|&k| (k, bound.get(&k).cloned().unwrap_or_default()))
                 .collect();
+            self.repeat_edits = ROWS.iter().flat_map(|row| row.iter()).chain(THUMB.iter())
+                .map(|&k| (k, profile.repeats(k)))
+                .collect();
             drop(set);
             self.edits_for = active_name.clone();
             self.save_status = None;
@@ -434,6 +443,8 @@ impl MonitorApp {
                  allowed (e.g. shift, ctrl+shift). Keys: a-z, 0-9, f1-f24, enter, esc, space, \
                  tab, arrows, home/end, pageup/pagedown, insert/delete, and media: playpause, \
                  nexttrack, prevtrack, volup, voldown, mute (media keys tap). Empty = unmapped.");
+        ui.weak("Tick 'repeat' to auto-repeat a key while held (like a keyboard). Repeat \
+                 timing (delay/rate) is set in config.toml under [autorepeat].");
         ui.add_space(6.0);
 
         let red = egui::Color32::from_rgb(220, 90, 90);
@@ -443,13 +454,13 @@ impl MonitorApp {
 
         egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
             for &key in ROWS.iter().flat_map(|row| row.iter()) {
-                render_binding_row(ui, key, &mut self.edits, &valid_keys);
+                render_binding_row(ui, key, &mut self.edits, &mut self.repeat_edits, &valid_keys);
             }
             ui.add_space(6.0);
             ui.separator();
             ui.label("Thumb buttons");
             for &key in THUMB.iter() {
-                render_binding_row(ui, key, &mut self.edits, &valid_keys);
+                render_binding_row(ui, key, &mut self.edits, &mut self.repeat_edits, &valid_keys);
             }
         });
 
@@ -461,7 +472,11 @@ impl MonitorApp {
                     .filter(|(_, v)| !v.is_empty())
                     .map(|(k, v)| (*k, v.clone()))
                     .collect();
-                match self.profiles.write().unwrap().save_active_bindings(bindings, HashMap::new()) {
+                let repeat: HashMap<G13Key, bool> = self.repeat_edits.iter()
+                    .filter(|(_, &v)| v)
+                    .map(|(k, &v)| (*k, v))
+                    .collect();
+                match self.profiles.write().unwrap().save_active_bindings(bindings, repeat) {
                     Ok(()) => self.save_status = Some("saved".to_string()),
                     Err(e) => {
                         log::warn!("save failed: {e:#}");
