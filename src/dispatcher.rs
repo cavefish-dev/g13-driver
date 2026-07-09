@@ -11,10 +11,9 @@ use crate::protocol::{G13Event, G13Key, MKey};
 /// A currently-held key binding plus its auto-repeat schedule.
 struct HeldKey {
     combo: KeyCombo,
-    repeat: bool,         // snapshot of profile.repeats(key) at press time
-    delay_ms: u64,        // snapshot of manifest timing at press time
+    repeat: bool,        // snapshot of profile.repeats(key) at press time
+    delay_ms: u64,       // snapshot of manifest timing at press time
     interval_ms: u64,
-    pressed_at: Instant,  // wall-clock time of key-down, for scheduling first repeat
     next_repeat: Option<Instant>, // None until the first tick schedules it
 }
 
@@ -77,7 +76,6 @@ impl Dispatcher {
                         repeat,
                         delay_ms: ar.delay_ms,
                         interval_ms: ar.interval_ms,
-                        pressed_at: Instant::now(),
                         next_repeat: None,
                     });
                 }
@@ -102,16 +100,17 @@ impl Dispatcher {
         for held in self.held_keys.values_mut() {
             if !held.repeat { continue; }
             let Some(key) = held.combo.key.as_deref() else { continue; };
-            // Initialise the schedule from the press time on first tick.
-            if held.next_repeat.is_none() {
-                held.next_repeat = Some(held.pressed_at + Duration::from_millis(held.delay_ms));
-            }
-            if let Some(mut due) = held.next_repeat {
-                while now >= due {
-                    to_fire.push(key.to_string());
-                    due += Duration::from_millis(held.interval_ms);
+            match held.next_repeat {
+                None => {
+                    held.next_repeat = Some(now + Duration::from_millis(held.delay_ms));
                 }
-                held.next_repeat = Some(due);
+                Some(mut due) => {
+                    while now >= due {
+                        to_fire.push(key.to_string());
+                        due += Duration::from_millis(held.interval_ms);
+                    }
+                    held.next_repeat = Some(due);
+                }
             }
         }
         for key in to_fire {
@@ -490,8 +489,8 @@ mod tests {
         let mut d = Dispatcher::new(config, Box::new(injector));
         let t0 = Instant::now();
         d.handle(G13Event::KeyDown(G13Key::G1)).unwrap();
-        d.tick(t0 + Duration::from_millis(101));
-        // combo_down recorded elsewhere; the repeat re-fires only the key "c".
+        d.tick(t0); // first tick anchors the schedule at t0+100ms; no fire yet
+        d.tick(t0 + Duration::from_millis(101)); // first repeat
         assert_eq!(*holds.lock().unwrap(), vec!["down:c".to_string()]);
     }
 
@@ -524,7 +523,9 @@ mod tests {
         let mut d = Dispatcher::new(config, Box::new(injector));
         let t0 = Instant::now();
         d.handle(G13Event::KeyDown(G13Key::G1)).unwrap();
+        d.tick(t0); // anchor
         d.tick(t0 + Duration::from_millis(101)); // one repeat
+        assert_eq!(holds.lock().unwrap().len(), 1);
         d.handle(G13Event::KeyUp(G13Key::G1)).unwrap();
         holds.lock().unwrap().clear();
         d.tick(t0 + Duration::from_millis(300)); // released -> no more
