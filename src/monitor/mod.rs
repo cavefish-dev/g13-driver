@@ -459,7 +459,7 @@ impl MonitorApp {
                     .filter(|(_, v)| !v.is_empty())
                     .map(|(k, v)| (*k, v.clone()))
                     .collect();
-                match self.profiles.write().unwrap().save_active_bindings(bindings) {
+                match self.profiles.write().unwrap().save_active_bindings(bindings, HashMap::new()) {
                     Ok(()) => self.save_status = Some("saved".to_string()),
                     Err(e) => {
                         log::warn!("save failed: {e:#}");

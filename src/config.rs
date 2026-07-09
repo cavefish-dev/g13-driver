@@ -10,6 +10,8 @@ pub struct RawConfig {
     pub keys: HashMap<String, String>,
     #[serde(default)]
     pub joystick: Option<RawJoystick>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub repeat: HashMap<String, bool>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -78,6 +80,7 @@ pub struct JoystickConfig {
 pub struct Profile {
     key_bindings: HashMap<G13Key, String>,
     joystick: Option<JoystickConfig>,
+    repeat: HashMap<G13Key, bool>,
 }
 
 impl Profile {
@@ -97,12 +100,19 @@ impl Profile {
             key_bindings.insert(key, binding);
         }
 
+        let mut repeat = HashMap::new();
+        for (name, on) in raw.repeat {
+            let key = parse_g13_key(&name)
+                .with_context(|| format!("unknown G13 key in [repeat]: {}", name))?;
+            repeat.insert(key, on);
+        }
+
         let joystick = match raw.joystick {
             Some(rj) => Some(parse_joystick(rj)?),
             None => None,
         };
 
-        Ok(Self { key_bindings, joystick })
+        Ok(Self { key_bindings, joystick, repeat })
     }
 
     pub fn get_binding(&self, key: G13Key) -> Option<&str> {
@@ -121,7 +131,15 @@ impl Profile {
         self.key_bindings = bindings;
     }
 
-    /// Serialize this profile back to TOML (keys + joystick). Comments in the
+    pub fn repeats(&self, key: G13Key) -> bool {
+        *self.repeat.get(&key).unwrap_or(&false)
+    }
+
+    pub fn set_repeat(&mut self, repeat: HashMap<G13Key, bool>) {
+        self.repeat = repeat;
+    }
+
+    /// Serialize this profile back to TOML (keys + joystick + repeat). Comments in the
     /// original file are not preserved (the file becomes GUI-managed).
     pub fn to_toml(&self) -> Result<String> {
         let keys: HashMap<String, String> = self.key_bindings.iter()
@@ -138,7 +156,11 @@ impl Profile {
             left: j.left.clone(),
             right: j.right.clone(),
         });
-        let raw = RawConfig { keys, joystick };
+        let repeat: HashMap<String, bool> = self.repeat.iter()
+            .filter(|(_, &v)| v)
+            .map(|(k, _)| (format!("{k:?}"), true)) // Debug of G13Key: "G1".."Stick"
+            .collect();
+        let raw = RawConfig { keys, joystick, repeat };
         toml::to_string(&raw).context("failed to serialize profile")
     }
 }
@@ -291,12 +313,17 @@ impl ProfileSet {
         &mut self.m1
     }
 
-    /// Replace the active profile's key bindings (joystick untouched) and write
+    /// Replace the active profile's key bindings and repeat flags (joystick untouched) and write
     /// the profile file. The watcher will reload the identical content.
-    pub fn save_active_bindings(&mut self, bindings: HashMap<G13Key, String>) -> Result<()> {
+    pub fn save_active_bindings(
+        &mut self,
+        bindings: HashMap<G13Key, String>,
+        repeat: HashMap<G13Key, bool>,
+    ) -> Result<()> {
         let path = self.active_path();
         let profile = self.active_profile_mut();
         profile.set_bindings(bindings);
+        profile.set_repeat(repeat);
         let toml = profile.to_toml()?;
         std::fs::write(&path, toml)
             .with_context(|| format!("failed to write {}", path.display()))?;
@@ -439,7 +466,7 @@ mod profileset_tests {
         let mut b = HashMap::new();
         b.insert(G13Key::G1, "ctrl+a".to_string());
         b.insert(G13Key::G2, "f1".to_string());
-        set.save_active_bindings(b).unwrap();
+        set.save_active_bindings(b, HashMap::new()).unwrap();
 
         // Fresh load from disk reflects the change; joystick preserved; game untouched.
         let reloaded = ProfileSet::load(&d.join("config.toml")).unwrap();
@@ -490,6 +517,7 @@ mod tests {
         RawConfig {
             keys: pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
             joystick: None,
+            repeat: HashMap::new(),
         }
     }
 
@@ -613,5 +641,42 @@ G3 = "f5"
         assert_eq!(config.get_binding(G13Key::G1), Some("ctrl+c"));
         assert_eq!(config.get_binding(G13Key::G3), Some("f5"));
         assert_eq!(config.get_binding(G13Key::G2), None);
+    }
+
+    #[test]
+    fn parses_repeat_flags() {
+        let src = "[keys]\nG1 = \"a\"\nG2 = \"b\"\n[repeat]\nG2 = true\n";
+        let raw: RawConfig = toml::from_str(src).unwrap();
+        let p = Profile::from_raw(raw).unwrap();
+        assert!(!p.repeats(G13Key::G1));
+        assert!(p.repeats(G13Key::G2));
+    }
+
+    #[test]
+    fn repeat_defaults_false_when_absent() {
+        let p = Profile::from_raw(raw(&[("G1", "a")])).unwrap();
+        assert!(!p.repeats(G13Key::G1));
+    }
+
+    #[test]
+    fn repeat_round_trips_through_toml() {
+        let src = "[keys]\nG1 = \"a\"\nG2 = \"b\"\n[repeat]\nG2 = true\n";
+        let raw: RawConfig = toml::from_str(src).unwrap();
+        let p = Profile::from_raw(raw).unwrap();
+        let toml = p.to_toml().unwrap();
+        let reloaded = Profile::from_raw(toml::from_str(&toml).unwrap()).unwrap();
+        assert!(reloaded.repeats(G13Key::G2));
+        assert!(!reloaded.repeats(G13Key::G1));
+    }
+
+    #[test]
+    fn to_toml_omits_disabled_repeat_flags() {
+        use std::collections::HashMap;
+        let mut map = HashMap::new();
+        map.insert(G13Key::G1, false);
+        let mut p = Profile::from_raw(raw(&[("G1", "a")])).unwrap();
+        p.set_repeat(map);
+        let toml = p.to_toml().unwrap();
+        assert!(!toml.contains("[repeat]"));
     }
 }
