@@ -1,7 +1,8 @@
 use std::path::PathBuf;
-use std::sync::mpsc::{self, Receiver};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::sync::{Arc, RwLock};
 use std::thread;
+use std::time::{Duration, Instant};
 use anyhow::Result;
 use crate::config::{JoystickMode, ProfileSet};
 use crate::protocol::G13Event;
@@ -46,9 +47,16 @@ pub fn run_headless(config: Arc<RwLock<ProfileSet>>, rx: Receiver<G13Event>) -> 
 
     log::info!("g13-driver running (headless) — press Ctrl+C to stop");
 
-    for event in rx {
-        if let Err(e) = dispatcher.handle(event) {
-            log::warn!("dispatch error: {e:#}");
+    loop {
+        match rx.recv_timeout(Duration::from_millis(15)) {
+            Ok(event) => {
+                if let Err(e) = dispatcher.handle(event) {
+                    log::warn!("dispatch error: {e:#}");
+                }
+                dispatcher.tick(Instant::now());
+            }
+            Err(RecvTimeoutError::Timeout) => dispatcher.tick(Instant::now()),
+            Err(RecvTimeoutError::Disconnected) => break,
         }
     }
 

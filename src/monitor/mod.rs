@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, RwLock};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use anyhow::Result;
 use eframe::egui;
 use crate::config::ProfileSet;
@@ -152,7 +152,7 @@ fn consumer_loop(
 ) {
     let mut was_active = !dry_run.load(Ordering::Relaxed);
     loop {
-        match rx.recv_timeout(Duration::from_millis(50)) {
+        match rx.recv_timeout(Duration::from_millis(15)) {
             Ok(event) => {
                 state.lock().unwrap().apply(&event);
                 let active = !dry_run.load(Ordering::Relaxed);
@@ -165,6 +165,7 @@ fn consumer_loop(
                     }
                 }
                 was_active = active;
+                dispatcher.tick(Instant::now());
                 ctx.request_repaint();
             }
             Err(RecvTimeoutError::Timeout) => {
@@ -173,6 +174,7 @@ fn consumer_loop(
                     dispatcher.release_held();
                 }
                 was_active = active;
+                dispatcher.tick(Instant::now());
             }
             Err(RecvTimeoutError::Disconnected) => {
                 dispatcher.release_held();
