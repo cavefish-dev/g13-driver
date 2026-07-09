@@ -27,6 +27,37 @@ pub struct RawJoystick {
 fn default_mode() -> String { "wasd".to_string() }
 fn default_deadzone() -> u16 { 30 }
 
+#[derive(Debug, Deserialize, Clone)]
+struct RawAutoRepeat {
+    #[serde(default = "default_delay_ms")]
+    delay_ms: u64,
+    #[serde(default = "default_interval_ms")]
+    interval_ms: u64,
+}
+
+fn default_delay_ms() -> u64 { 400 }
+fn default_interval_ms() -> u64 { 40 }
+
+/// Global auto-repeat timing (from the manifest `[autorepeat]`; defaults when absent).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AutoRepeat {
+    pub delay_ms: u64,
+    pub interval_ms: u64,
+}
+
+impl Default for AutoRepeat {
+    fn default() -> Self { Self { delay_ms: 400, interval_ms: 40 } }
+}
+
+impl AutoRepeat {
+    fn from_raw(r: RawAutoRepeat) -> Self {
+        Self {
+            delay_ms: r.delay_ms,
+            interval_ms: r.interval_ms.max(1), // 0 would busy-spin the tick
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum JoystickMode {
     Wasd,
@@ -118,6 +149,8 @@ struct RawManifest {
     m1: Option<String>,
     m2: Option<String>,
     m3: Option<String>,
+    #[serde(default)]
+    autorepeat: Option<RawAutoRepeat>,
 }
 
 /// The loaded profiles plus which M-key is active. Replaces a bare `Profile`
@@ -134,6 +167,7 @@ pub struct ProfileSet {
     /// Invariant: always points at a populated slot (or M1). `set_active` refuses
     /// empty slots, so `active_profile()`/`active_name()` stay coherent.
     active: MKey,
+    autorepeat: AutoRepeat,
 }
 
 impl ProfileSet {
@@ -146,6 +180,7 @@ impl ProfileSet {
         let raw: RawManifest = toml::from_str(&content)
             .with_context(|| format!("failed to parse config: {}", config_path.display()))?;
         let base = config_path.parent().unwrap_or_else(|| Path::new("."));
+        let autorepeat = raw.autorepeat.map(AutoRepeat::from_raw).unwrap_or_default();
 
         if let Some(m1_name) = raw.m1 {
             // Manifest mode.
@@ -169,6 +204,7 @@ impl ProfileSet {
                 m1_name: Some(m1_name),
                 m2_name, m3_name,
                 active: MKey::M1,
+                autorepeat,
             })
         } else {
             // Legacy: the config file is a single profile.
@@ -179,11 +215,14 @@ impl ProfileSet {
                 m1, m2: None, m3: None,
                 m1_name: name, m2_name: None, m3_name: None,
                 active: MKey::M1,
+                autorepeat,
             })
         }
     }
 
     pub fn active(&self) -> MKey { self.active }
+
+    pub fn autorepeat(&self) -> AutoRepeat { self.autorepeat }
 
     pub fn active_profile(&self) -> &Profile {
         match self.active {
@@ -413,6 +452,32 @@ mod profileset_tests {
         // Manifest untouched.
         let manifest = std::fs::read_to_string(d.join("config.toml")).unwrap();
         assert!(manifest.contains("m1 = \"default.toml\""));
+    }
+
+    #[test]
+    fn autorepeat_defaults_when_absent() {
+        let d = tmp("ar-default");
+        write(&d, "config.toml", "[keys]\nG1 = \"a\"\n");
+        let set = ProfileSet::load(&d.join("config.toml")).unwrap();
+        assert_eq!(set.autorepeat(), AutoRepeat { delay_ms: 400, interval_ms: 40 });
+    }
+
+    #[test]
+    fn autorepeat_parses_values() {
+        let d = tmp("ar-parse");
+        write(&d.join("profiles"), "default.toml", "[keys]\nG1 = \"a\"\n");
+        write(&d, "config.toml",
+            "profiles_dir = \"profiles\"\nm1 = \"default.toml\"\n[autorepeat]\ndelay_ms = 250\ninterval_ms = 33\n");
+        let set = ProfileSet::load(&d.join("config.toml")).unwrap();
+        assert_eq!(set.autorepeat(), AutoRepeat { delay_ms: 250, interval_ms: 33 });
+    }
+
+    #[test]
+    fn autorepeat_interval_zero_clamped_to_one() {
+        let d = tmp("ar-clamp");
+        write(&d, "config.toml", "[keys]\nG1 = \"a\"\n[autorepeat]\ninterval_ms = 0\n");
+        let set = ProfileSet::load(&d.join("config.toml")).unwrap();
+        assert_eq!(set.autorepeat().interval_ms, 1);
     }
 }
 
