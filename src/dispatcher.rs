@@ -1,17 +1,28 @@
 use anyhow::Result;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
+use std::time::{Duration, Instant};
 use crate::config::{JoystickMode, ProfileSet};
 use crate::injector::{KeyCombo, KeyInjector};
 use crate::injector::key_map::tap_only_keys;
 use crate::joystick::{HoldAction, JoystickMapper};
 use crate::protocol::{G13Event, G13Key, MKey};
 
+/// A currently-held key binding plus its auto-repeat schedule.
+struct HeldKey {
+    combo: KeyCombo,
+    repeat: bool,         // snapshot of profile.repeats(key) at press time
+    delay_ms: u64,        // snapshot of manifest timing at press time
+    interval_ms: u64,
+    pressed_at: Instant,  // wall-clock time of key-down, for scheduling first repeat
+    next_repeat: Option<Instant>, // None until the first tick schedules it
+}
+
 pub struct Dispatcher {
     profiles: Arc<RwLock<ProfileSet>>,
     injector: Box<dyn KeyInjector>,
     joystick: JoystickMapper,
-    held_keys: HashMap<G13Key, KeyCombo>,
+    held_keys: HashMap<G13Key, HeldKey>,
     tap_only: HashSet<String>,
 }
 
@@ -38,9 +49,10 @@ impl Dispatcher {
     }
 
     fn handle_key_down(&mut self, key: G13Key) {
-        let binding = {
+        let (binding, repeat, ar) = {
             let set = self.profiles.read().unwrap();
-            set.active_profile().get_binding(key).map(str::to_owned)
+            let p = set.active_profile();
+            (p.get_binding(key).map(str::to_owned), p.repeats(key), set.autorepeat())
         };
         let Some(binding) = binding else {
             log::debug!("{key:?} -> (unmapped)");
@@ -59,16 +71,52 @@ impl Dispatcher {
             }
         } else {
             match self.injector.combo_down(&combo) {
-                Ok(()) => { self.held_keys.insert(key, combo); }
+                Ok(()) => {
+                    self.held_keys.insert(key, HeldKey {
+                        combo,
+                        repeat,
+                        delay_ms: ar.delay_ms,
+                        interval_ms: ar.interval_ms,
+                        pressed_at: Instant::now(),
+                        next_repeat: None,
+                    });
+                }
                 Err(e) => log::warn!("injection failed: {e:#}"),
             }
         }
     }
 
     fn handle_key_up(&mut self, key: G13Key) {
-        if let Some(combo) = self.held_keys.remove(&key) {
-            if let Err(e) = self.injector.combo_up(&combo) {
+        if let Some(held) = self.held_keys.remove(&key) {
+            if let Err(e) = self.injector.combo_up(&held.combo) {
                 log::warn!("injection failed: {e:#}");
+            }
+        }
+    }
+
+    /// Re-fire held, repeat-enabled keys whose interval has elapsed. Called
+    /// periodically by the consumer loop with the current time. Collect first,
+    /// inject second, so we don't borrow `held_keys` while calling the injector.
+    pub fn tick(&mut self, now: Instant) {
+        let mut to_fire: Vec<String> = Vec::new();
+        for held in self.held_keys.values_mut() {
+            if !held.repeat { continue; }
+            let Some(key) = held.combo.key.as_deref() else { continue; };
+            // Initialise the schedule from the press time on first tick.
+            if held.next_repeat.is_none() {
+                held.next_repeat = Some(held.pressed_at + Duration::from_millis(held.delay_ms));
+            }
+            if let Some(mut due) = held.next_repeat {
+                while now >= due {
+                    to_fire.push(key.to_string());
+                    due += Duration::from_millis(held.interval_ms);
+                }
+                held.next_repeat = Some(due);
+            }
+        }
+        for key in to_fire {
+            if let Err(e) = self.injector.key_down(&key) {
+                log::warn!("auto-repeat injection failed: {e:#}");
             }
         }
     }
@@ -124,8 +172,8 @@ impl Dispatcher {
     /// Active->Dry-run, USB disconnect, and shutdown so nothing sticks.
     pub fn release_held(&mut self) {
         self.release_joystick();
-        for (_key, combo) in self.held_keys.drain() {
-            if let Err(e) = self.injector.combo_up(&combo) {
+        for (_key, held) in self.held_keys.drain() {
+            if let Err(e) = self.injector.combo_up(&held.combo) {
                 log::warn!("injection failed on release: {e:#}");
             }
         }
@@ -139,6 +187,7 @@ mod tests {
     use crate::injector::Modifier;
     use crate::protocol::{G13Event, G13Key, MKey};
     use std::sync::{Arc, Mutex, RwLock};
+    use std::time::{Duration, Instant};
 
     struct MockInjector {
         combos: Arc<Mutex<Vec<KeyCombo>>>,
@@ -393,5 +442,92 @@ mod tests {
         d.handle(G13Event::KeyDown(G13Key::G1)).unwrap();
         d.release_held();
         assert_eq!(ups.lock().unwrap()[0].key.as_deref(), Some("w"));
+    }
+
+    fn make_config_repeat(keys: &str, repeat: &str, delay: u64, interval: u64) -> Arc<RwLock<ProfileSet>> {
+        let d = tmp("rep");
+        std::fs::create_dir_all(&d).unwrap();
+        let body = format!(
+            "[keys]\n{keys}\n[repeat]\n{repeat}\n[autorepeat]\ndelay_ms = {delay}\ninterval_ms = {interval}\n"
+        );
+        write(&d.join("config.toml"), &body);
+        Arc::new(RwLock::new(ProfileSet::load(&d.join("config.toml")).unwrap()))
+    }
+
+    #[test]
+    fn held_key_repeats_after_delay() {
+        let (injector, holds) = MockInjector::new_with_holds();
+        let config = make_config_repeat("G1 = \"a\"", "G1 = true", 100, 50);
+        let mut d = Dispatcher::new(config, Box::new(injector));
+        let t0 = Instant::now();
+        d.handle(G13Event::KeyDown(G13Key::G1)).unwrap();
+        d.tick(t0); // schedules first repeat at t0+100ms; no fire yet
+        assert!(holds.lock().unwrap().is_empty());
+        d.tick(t0 + Duration::from_millis(101)); // first repeat
+        assert_eq!(*holds.lock().unwrap(), vec!["down:a".to_string()]);
+        d.tick(t0 + Duration::from_millis(151)); // second repeat
+        assert_eq!(*holds.lock().unwrap(),
+            vec!["down:a".to_string(), "down:a".to_string()]);
+    }
+
+    #[test]
+    fn disabled_key_never_repeats() {
+        let (injector, holds) = MockInjector::new_with_holds();
+        // G1 bound but only G2 is in [repeat].
+        let config = make_config_repeat("G1 = \"a\"", "G2 = true", 100, 50);
+        let mut d = Dispatcher::new(config, Box::new(injector));
+        let t0 = Instant::now();
+        d.handle(G13Event::KeyDown(G13Key::G1)).unwrap();
+        d.tick(t0);
+        d.tick(t0 + Duration::from_millis(500));
+        assert!(holds.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn combo_repeat_fires_key_only() {
+        let (injector, holds) = MockInjector::new_with_holds();
+        let config = make_config_repeat("G1 = \"ctrl+c\"", "G1 = true", 100, 50);
+        let mut d = Dispatcher::new(config, Box::new(injector));
+        let t0 = Instant::now();
+        d.handle(G13Event::KeyDown(G13Key::G1)).unwrap();
+        d.tick(t0 + Duration::from_millis(101));
+        // combo_down recorded elsewhere; the repeat re-fires only the key "c".
+        assert_eq!(*holds.lock().unwrap(), vec!["down:c".to_string()]);
+    }
+
+    #[test]
+    fn modifier_only_repeat_is_noop() {
+        let (injector, holds) = MockInjector::new_with_holds();
+        let config = make_config_repeat("G1 = \"shift\"", "G1 = true", 100, 50);
+        let mut d = Dispatcher::new(config, Box::new(injector));
+        let t0 = Instant::now();
+        d.handle(G13Event::KeyDown(G13Key::G1)).unwrap();
+        d.tick(t0 + Duration::from_millis(300));
+        assert!(holds.lock().unwrap().is_empty(), "modifier-only has no key to repeat");
+    }
+
+    #[test]
+    fn media_key_with_repeat_never_held_or_repeated() {
+        let (injector, holds) = MockInjector::new_with_holds();
+        let config = make_config_repeat("G1 = \"playpause\"", "G1 = true", 100, 50);
+        let mut d = Dispatcher::new(config, Box::new(injector));
+        let t0 = Instant::now();
+        d.handle(G13Event::KeyDown(G13Key::G1)).unwrap();
+        d.tick(t0 + Duration::from_millis(300));
+        assert!(holds.lock().unwrap().is_empty()); // tapped via press(), never held
+    }
+
+    #[test]
+    fn repeat_stops_after_key_up() {
+        let (injector, holds) = MockInjector::new_with_holds();
+        let config = make_config_repeat("G1 = \"a\"", "G1 = true", 100, 50);
+        let mut d = Dispatcher::new(config, Box::new(injector));
+        let t0 = Instant::now();
+        d.handle(G13Event::KeyDown(G13Key::G1)).unwrap();
+        d.tick(t0 + Duration::from_millis(101)); // one repeat
+        d.handle(G13Event::KeyUp(G13Key::G1)).unwrap();
+        holds.lock().unwrap().clear();
+        d.tick(t0 + Duration::from_millis(300)); // released -> no more
+        assert!(holds.lock().unwrap().is_empty());
     }
 }
