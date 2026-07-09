@@ -7,3 +7,9 @@ profiles_dir = "profiles"
 m1 = "default.toml"
 m2 = "game.toml"
 m3 = "media.toml"
+
+# Auto-repeat timing (global). Uncomment to override the defaults below.
+# Per-binding on/off lives in each profile's [repeat] table (Bindings tab checkbox).
+# [autorepeat]
+# delay_ms = 400      # wait before repeating starts
+# interval_ms = 40    # gap between repeats (~25/sec); min 1
