@@ -55,7 +55,8 @@ fn render_binding_row(
 
 pub fn run(config: Arc<RwLock<ProfileSet>>, start_minimized: bool) -> Result<()> {
     let state = Arc::new(Mutex::new(DeviceState::new()));
-    let dry_run = Arc::new(AtomicBool::new(true)); // first launch = Dry-run
+    let start_active = config.read().unwrap().start_active();
+    let dry_run = Arc::new(AtomicBool::new(!start_active));
 
     // Fixed, non-resizable window sized to fit the content of every tab.
     let options = eframe::NativeOptions {
@@ -103,6 +104,13 @@ pub struct MonitorApp {
     repeat_edits: HashMap<G13Key, bool>,
     edits_for: Option<String>,
     save_status: Option<String>,
+    #[cfg(windows)]
+    tray: Option<crate::tray::TrayHandle>,
+    #[cfg(windows)]
+    activate_rx: Option<std::sync::mpsc::Receiver<()>>,
+    last_persisted_active: bool,
+    #[cfg(windows)]
+    last_icon: Option<crate::tray::IconState>,
 }
 
 impl MonitorApp {
@@ -112,7 +120,9 @@ impl MonitorApp {
         state: Arc<Mutex<DeviceState>>,
         dry_run: Arc<AtomicBool>,
     ) -> Self {
-        let app = Self {
+        let last_persisted_active = !dry_run.load(Ordering::Relaxed);
+        #[cfg_attr(not(windows), allow(unused_mut))]
+        let mut app = Self {
             profiles,
             state,
             dry_run,
@@ -121,7 +131,31 @@ impl MonitorApp {
             repeat_edits: HashMap::new(),
             edits_for: None,
             save_status: None,
+            #[cfg(windows)]
+            tray: None,
+            #[cfg(windows)]
+            activate_rx: None,
+            last_persisted_active,
+            #[cfg(windows)]
+            last_icon: None,
         };
+
+        // Windows: build the tray from the current state and start the
+        // activation waiter. A tray-build failure logs and falls back to a
+        // plain window (tray = None).
+        #[cfg(windows)]
+        {
+            let active = !app.dry_run.load(Ordering::Relaxed);
+            let st = crate::tray::icon_state(false, active); // not connected yet at startup
+            let tray = crate::tray::TrayHandle::new(st, active, crate::autostart::is_enabled())
+                .map_err(|e| log::warn!("tray unavailable: {e:#}"))
+                .ok();
+            let (tx, rx) = std::sync::mpsc::channel();
+            crate::single_instance::spawn_activation_waiter(tx);
+            app.tray = tray;
+            app.activate_rx = Some(rx);
+        }
+
         app.start_consumer(cc.egui_ctx.clone());
         app
     }
@@ -209,7 +243,70 @@ const THUMB: [G13Key; 3] = [G13Key::Btn1, G13Key::Btn2, G13Key::Stick];
 
 impl eframe::App for MonitorApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Close (X) / Minimize -> hide to tray instead of exiting.
+        if ctx.input(|i| i.viewport().close_requested()) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+        }
+        if ctx.input(|i| i.viewport().minimized == Some(true)) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+        }
+
+        // A second launch asked us to show the window.
+        #[cfg(windows)]
+        if let Some(rx) = &self.activate_rx {
+            if rx.try_recv().is_ok() {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+            }
+        }
+
+        // Drain tray menu events.
+        #[cfg(windows)]
+        if let Some(tray) = &mut self.tray {
+            while let Ok(ev) = tray_icon::menu::MenuEvent::receiver().try_recv() {
+                let ids = tray.ids();
+                if ev.id == ids.show {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                } else if ev.id == ids.active {
+                    let now_active = self.dry_run.load(Ordering::Relaxed); // was dry-run -> go active
+                    self.dry_run.store(!now_active, Ordering::Relaxed);
+                } else if ev.id == ids.autostart {
+                    let r = if crate::autostart::is_enabled() { crate::autostart::disable() }
+                            else { crate::autostart::enable() };
+                    if let Err(e) = r { log::warn!("autostart toggle failed: {e:#}"); }
+                } else if ev.id == ids.quit {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+            }
+            // Left-click / double-click the icon -> toggle window visibility.
+            while let Ok(_ev) = tray_icon::TrayIconEvent::receiver().try_recv() {
+                // Any click event toggles; refine to Click/DoubleClick if desired after verifying the enum.
+                let visible = ctx.input(|i| i.viewport().focused).unwrap_or(false);
+                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(!visible));
+            }
+        }
+
         let snapshot = self.state.lock().unwrap().clone();
+
+        // Persist a mode change (from any surface: header, Settings, tray).
+        let active = !self.dry_run.load(Ordering::Relaxed);
+        if active != self.last_persisted_active {
+            self.last_persisted_active = active;
+            if let Err(e) = self.profiles.read().unwrap().persist_start_active(active) {
+                log::warn!("could not persist mode: {e:#}");
+            }
+        }
+
+        // Sync the tray icon + checkmarks.
+        #[cfg(windows)]
+        if let Some(tray) = &mut self.tray {
+            let connected = matches!(snapshot.connection, Connection::Connected);
+            let st = crate::tray::icon_state(connected, active);
+            if self.last_icon != Some(st) { tray.set_state(st); self.last_icon = Some(st); }
+            tray.set_checks(active, crate::autostart::is_enabled());
+        }
 
         egui::TopBottomPanel::top("hd").show(ctx, |ui| {
             ui.horizontal(|ui| {
@@ -520,13 +617,22 @@ impl MonitorApp {
         ui.heading("Settings");
         ui.add_space(8.0);
         let mut dry = self.dry_run.load(Ordering::Relaxed);
-        ui.checkbox(&mut dry, "Start in Dry-run (safe)");
-        self.dry_run.store(dry, Ordering::Relaxed);
-        let mut f = false;
-        ui.checkbox(&mut f, "Start minimized to tray");
-        ui.checkbox(&mut f, "Launch at login");
+        if ui.checkbox(&mut dry, "Start in Dry-run (safe)").changed() {
+            self.dry_run.store(dry, Ordering::Relaxed);
+        }
+        #[cfg(windows)]
+        {
+            let mut on = crate::autostart::is_enabled();
+            if ui.checkbox(&mut on, "Launch at login").changed() {
+                let r = if on { crate::autostart::enable() } else { crate::autostart::disable() };
+                if let Err(e) = r {
+                    log::warn!("autostart toggle failed: {e:#}");
+                    ui.colored_label(egui::Color32::from_rgb(220, 90, 90), format!("failed: {e:#}"));
+                }
+            }
+        }
         ui.add_space(6.0);
-        ui.weak("(placeholder — only the Dry-run toggle is live; the rest are mockups)");
+        ui.weak("Close or minimize hides to the tray; the driver keeps running. Quit from the tray to exit.");
     }
 }
 
