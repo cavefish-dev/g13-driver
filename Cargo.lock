@@ -1337,6 +1337,7 @@ dependencies = [
  "rusb",
  "serde",
  "toml",
+ "toml_edit 0.22.27",
  "windows-sys 0.59.0",
 ]
 

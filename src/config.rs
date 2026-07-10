@@ -166,6 +166,12 @@ impl Profile {
 }
 
 #[derive(Debug, Deserialize)]
+struct RawApp {
+    #[serde(default)]
+    start_active: bool,
+}
+
+#[derive(Debug, Deserialize)]
 struct RawManifest {
     profiles_dir: Option<String>,
     m1: Option<String>,
@@ -173,6 +179,8 @@ struct RawManifest {
     m3: Option<String>,
     #[serde(default)]
     autorepeat: Option<RawAutoRepeat>,
+    #[serde(default)]
+    app: Option<RawApp>,
 }
 
 /// The loaded profiles plus which M-key is active. Replaces a bare `Profile`
@@ -190,6 +198,8 @@ pub struct ProfileSet {
     /// empty slots, so `active_profile()`/`active_name()` stay coherent.
     active: MKey,
     autorepeat: AutoRepeat,
+    config_path: PathBuf,
+    start_active: bool,
 }
 
 impl ProfileSet {
@@ -203,6 +213,7 @@ impl ProfileSet {
             .with_context(|| format!("failed to parse config: {}", config_path.display()))?;
         let base = config_path.parent().unwrap_or_else(|| Path::new("."));
         let autorepeat = raw.autorepeat.map(AutoRepeat::from_raw).unwrap_or_default();
+        let start_active = raw.app.as_ref().map(|a| a.start_active).unwrap_or(false);
 
         if let Some(m1_name) = raw.m1 {
             // Manifest mode.
@@ -227,6 +238,8 @@ impl ProfileSet {
                 m2_name, m3_name,
                 active: MKey::M1,
                 autorepeat,
+                config_path: config_path.to_path_buf(),
+                start_active,
             })
         } else {
             // Legacy: the config file is a single profile.
@@ -238,6 +251,8 @@ impl ProfileSet {
                 m1_name: name, m2_name: None, m3_name: None,
                 active: MKey::M1,
                 autorepeat,
+                config_path: config_path.to_path_buf(),
+                start_active,
             })
         }
     }
@@ -245,6 +260,25 @@ impl ProfileSet {
     pub fn active(&self) -> MKey { self.active }
 
     pub fn autorepeat(&self) -> AutoRepeat { self.autorepeat }
+
+    pub fn start_active(&self) -> bool { self.start_active }
+
+    /// Write `[app] start_active` into the manifest, preserving every other key and
+    /// comment (format-preserving via toml_edit). Best-effort; callers log on error.
+    pub fn persist_start_active(&self, value: bool) -> Result<()> {
+        use toml_edit::{DocumentMut, Item, Table, value as toml_value};
+        let text = std::fs::read_to_string(&self.config_path)
+            .with_context(|| format!("failed to read {}", self.config_path.display()))?;
+        let mut doc = text.parse::<DocumentMut>()
+            .with_context(|| format!("failed to parse {}", self.config_path.display()))?;
+        if !doc.as_table().contains_key("app") {
+            doc.as_table_mut().insert("app", Item::Table(Table::new()));
+        }
+        doc["app"]["start_active"] = toml_value(value);
+        std::fs::write(&self.config_path, doc.to_string())
+            .with_context(|| format!("failed to write {}", self.config_path.display()))?;
+        Ok(())
+    }
 
     pub fn active_profile(&self) -> &Profile {
         match self.active {
@@ -505,6 +539,42 @@ mod profileset_tests {
         write(&d, "config.toml", "[keys]\nG1 = \"a\"\n[autorepeat]\ninterval_ms = 0\n");
         let set = ProfileSet::load(&d.join("config.toml")).unwrap();
         assert_eq!(set.autorepeat().interval_ms, 1);
+    }
+
+    #[test]
+    fn start_active_defaults_false_when_absent() {
+        let d = tmp("app-default");
+        write(&d, "config.toml", "[keys]\nG1 = \"a\"\n");
+        let set = ProfileSet::load(&d.join("config.toml")).unwrap();
+        assert!(!set.start_active());
+    }
+
+    #[test]
+    fn start_active_parses_true() {
+        let d = tmp("app-true");
+        write(&d.join("profiles"), "default.toml", "[keys]\nG1 = \"a\"\n");
+        write(&d, "config.toml",
+            "profiles_dir = \"profiles\"\nm1 = \"default.toml\"\n[app]\nstart_active = true\n");
+        let set = ProfileSet::load(&d.join("config.toml")).unwrap();
+        assert!(set.start_active());
+    }
+
+    #[test]
+    fn persist_start_active_preserves_other_keys_and_reloads() {
+        let d = tmp("app-persist");
+        write(&d.join("profiles"), "default.toml", "[keys]\nG1 = \"a\"\n");
+        write(&d, "config.toml",
+            "# my manifest\nprofiles_dir = \"profiles\"\nm1 = \"default.toml\"\nm2 = \"game.toml\"\n");
+        let set = ProfileSet::load(&d.join("config.toml")).unwrap();
+        set.persist_start_active(true).unwrap();
+
+        // Reloads as true; other keys + the comment survive.
+        let reloaded = ProfileSet::load(&d.join("config.toml")).unwrap();
+        assert!(reloaded.start_active());
+        let text = std::fs::read_to_string(d.join("config.toml")).unwrap();
+        assert!(text.contains("# my manifest"));
+        assert!(text.contains("m2 = \"game.toml\""));
+        assert!(text.contains("profiles_dir = \"profiles\""));
     }
 }
 
