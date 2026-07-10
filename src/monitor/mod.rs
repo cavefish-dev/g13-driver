@@ -53,7 +53,7 @@ fn render_binding_row(
     });
 }
 
-pub fn run(config: Arc<RwLock<ProfileSet>>) -> Result<()> {
+pub fn run(config: Arc<RwLock<ProfileSet>>, start_minimized: bool) -> Result<()> {
     let state = Arc::new(Mutex::new(DeviceState::new()));
     let dry_run = Arc::new(AtomicBool::new(true)); // first launch = Dry-run
 
@@ -61,7 +61,8 @@ pub fn run(config: Arc<RwLock<ProfileSet>>) -> Result<()> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([660.0, 560.0])
-            .with_resizable(false),
+            .with_resizable(false)
+            .with_visible(!start_minimized),
         ..Default::default()
     };
 

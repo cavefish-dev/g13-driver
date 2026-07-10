@@ -16,6 +16,12 @@ notify  = "6"
 eframe  = "0.31"
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.59", features = ["Win32_UI_Input_KeyboardAndMouse"] }
+windows-sys = { version = "0.59", features = [
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_System_Console",
+    "Win32_System_Threading",
+    "Win32_Foundation",
+    "Win32_Security",
+] }
 winreg = "0.56"
 tray-icon = "0.24"
