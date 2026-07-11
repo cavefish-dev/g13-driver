@@ -248,6 +248,10 @@ impl MonitorApp {
                         ctx.request_repaint();
                     } else if ev.id == quit_id {
                         quit.store(true, std::sync::atomic::Ordering::Relaxed);
+                        // Show the window first: eframe's update() (which honors the
+                        // quit flag to allow the close) does not run while hidden, so
+                        // we must un-hide before posting the close or Quit is ignored.
+                        show_main_window();
                         use windows_sys::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_CLOSE};
                         let hwnd = find_main_window();
                         if hwnd != 0 { unsafe { PostMessageW(hwnd as _, WM_CLOSE, 0, 0); } }
