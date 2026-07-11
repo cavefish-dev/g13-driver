@@ -24,6 +24,43 @@ fn combo_valid(s: &str, valid_keys: &HashSet<String>) -> bool {
     }
 }
 
+#[cfg(windows)]
+fn find_main_window() -> isize {
+    use windows_sys::Win32::UI::WindowsAndMessaging::FindWindowW;
+    let title: Vec<u16> = "G13 Monitor\0".encode_utf16().collect();
+    unsafe { FindWindowW(std::ptr::null(), title.as_ptr()) as isize }
+}
+
+#[cfg(windows)]
+fn show_main_window() {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{SetForegroundWindow, ShowWindow, SW_SHOW};
+    let hwnd = find_main_window();
+    if hwnd != 0 {
+        unsafe {
+            ShowWindow(hwnd as _, SW_SHOW);
+            SetForegroundWindow(hwnd as _);
+        }
+    }
+}
+
+#[cfg(windows)]
+fn toggle_main_window() {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        IsWindowVisible, SetForegroundWindow, ShowWindow, SW_HIDE, SW_SHOW,
+    };
+    let hwnd = find_main_window();
+    if hwnd != 0 {
+        unsafe {
+            if IsWindowVisible(hwnd as _) != 0 {
+                ShowWindow(hwnd as _, SW_HIDE);
+            } else {
+                ShowWindow(hwnd as _, SW_SHOW);
+                SetForegroundWindow(hwnd as _);
+            }
+        }
+    }
+}
+
 fn render_binding_row(
     ui: &mut egui::Ui,
     key: G13Key,
@@ -175,12 +212,17 @@ impl MonitorApp {
                 let window_visible = app.window_visible.clone();
                 let quit = app.quit.clone();
 
-                // Menu events (right-click menu items).
+                // Menu events (right-click menu items). These run on the
+                // message-loop thread even while the window is hidden, so they
+                // show/hide the OS window directly via Win32 — eframe pauses its
+                // viewport-command processing while hidden, so Visible(true)
+                // would never be applied.
                 tray_icon::menu::MenuEvent::set_event_handler(Some(move |ev: tray_icon::menu::MenuEvent| {
                     if ev.id == show_id {
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
-                        window_visible.store(true, Ordering::Relaxed);
+                        toggle_main_window();
+                        use windows_sys::Win32::UI::WindowsAndMessaging::IsWindowVisible;
+                        let visible = unsafe { IsWindowVisible(find_main_window() as _) != 0 };
+                        window_visible.store(visible, Ordering::Relaxed);
                         ctx.request_repaint();
                     } else if ev.id == active_id {
                         let a = dry_run.load(Ordering::Relaxed);
@@ -196,31 +238,10 @@ impl MonitorApp {
                         }
                         ctx.request_repaint();
                     } else if ev.id == quit_id {
-                        quit.store(true, Ordering::Relaxed);
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                        ctx.request_repaint();
-                    }
-                }));
-
-                // Left-click the icon -> toggle window visibility. Only act on a
-                // single left-button release so hover/move/right-click don't fire.
-                let ctx = cc.egui_ctx.clone();
-                let window_visible = app.window_visible.clone();
-                tray_icon::TrayIconEvent::set_event_handler(Some(move |ev: tray_icon::TrayIconEvent| {
-                    if let tray_icon::TrayIconEvent::Click {
-                        button: tray_icon::MouseButton::Left,
-                        button_state: tray_icon::MouseButtonState::Up,
-                        ..
-                    } = ev
-                    {
-                        if window_visible.load(Ordering::Relaxed) {
-                            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
-                            window_visible.store(false, Ordering::Relaxed);
-                        } else {
-                            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
-                            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
-                            window_visible.store(true, Ordering::Relaxed);
-                        }
+                        quit.store(true, std::sync::atomic::Ordering::Relaxed);
+                        use windows_sys::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_CLOSE};
+                        let hwnd = find_main_window();
+                        if hwnd != 0 { unsafe { PostMessageW(hwnd as _, WM_CLOSE, 0, 0); } }
                         ctx.request_repaint();
                     }
                 }));
@@ -235,8 +256,7 @@ impl MonitorApp {
             let window_visible = app.window_visible.clone();
             std::thread::spawn(move || {
                 while rx.recv().is_ok() {
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                    show_main_window();
                     window_visible.store(true, Ordering::Relaxed);
                     ctx.request_repaint();
                 }
