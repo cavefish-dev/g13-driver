@@ -44,6 +44,15 @@ fn show_main_window() {
 }
 
 #[cfg(windows)]
+fn hide_main_window() {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_HIDE};
+    let hwnd = find_main_window();
+    if hwnd != 0 {
+        unsafe { ShowWindow(hwnd as _, SW_HIDE); }
+    }
+}
+
+#[cfg(windows)]
 fn toggle_main_window() {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         IsWindowVisible, SetForegroundWindow, ShowWindow, SW_HIDE, SW_SHOW,
@@ -363,13 +372,18 @@ impl eframe::App for MonitorApp {
                 // allow the close — do nothing
             } else {
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                // Hide via Win32 (not ViewportCommand::Visible) so show and hide
+                // use the same mechanism — otherwise eframe's visibility state and
+                // the OS window drift out of sync after a Win32 show.
+                #[cfg(windows)]
+                hide_main_window();
                 self.window_visible.store(false, Ordering::Relaxed);
             }
         }
         // Minimize -> hide to tray.
         if ctx.input(|i| i.viewport().minimized == Some(true)) {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            #[cfg(windows)]
+            hide_main_window();
             self.window_visible.store(false, Ordering::Relaxed);
         }
 
