@@ -13,3 +13,7 @@ m3 = "media.toml"
 # [autorepeat]
 # delay_ms = 400      # wait before repeating starts
 # interval_ms = 40    # gap between repeats (~25/sec); min 1
+
+# App state (managed by the GUI; safe to edit while stopped).
+# [app]
+# start_active = false   # resume Active (true) or Dry-run (false) on next launch

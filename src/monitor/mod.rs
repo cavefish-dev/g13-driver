@@ -70,7 +70,7 @@ pub fn run(config: Arc<RwLock<ProfileSet>>, start_minimized: bool) -> Result<()>
     eframe::run_native(
         "G13 Monitor",
         options,
-        Box::new(move |cc| Ok(Box::new(MonitorApp::new(cc, config, state, dry_run)))),
+        Box::new(move |cc| Ok(Box::new(MonitorApp::new(cc, config, state, dry_run, start_minimized)))),
     )
     .map_err(|e| anyhow::anyhow!("eframe error: {e}"))?;
     Ok(())
@@ -99,6 +99,13 @@ pub struct MonitorApp {
     profiles: Arc<RwLock<ProfileSet>>,
     state: Arc<Mutex<DeviceState>>,
     dry_run: Arc<AtomicBool>,
+    /// Set by the tray "Quit" handler so the close interception in `update()`
+    /// allows the close instead of hiding to the tray.
+    quit: Arc<AtomicBool>,
+    /// True while the window is shown. The tray/activation handlers run on the
+    /// message-loop thread (even while hidden), so they own the visibility truth
+    /// via this atomic; `update()` reads/refreshes it.
+    window_visible: Arc<AtomicBool>,
     tab: Tab,
     edits: HashMap<G13Key, String>,
     repeat_edits: HashMap<G13Key, bool>,
@@ -106,8 +113,6 @@ pub struct MonitorApp {
     save_status: Option<String>,
     #[cfg(windows)]
     tray: Option<crate::tray::TrayHandle>,
-    #[cfg(windows)]
-    activate_rx: Option<std::sync::mpsc::Receiver<()>>,
     last_persisted_active: bool,
     #[cfg(windows)]
     last_icon: Option<crate::tray::IconState>,
@@ -119,13 +124,18 @@ impl MonitorApp {
         profiles: Arc<RwLock<ProfileSet>>,
         state: Arc<Mutex<DeviceState>>,
         dry_run: Arc<AtomicBool>,
+        start_minimized: bool,
     ) -> Self {
         let last_persisted_active = !dry_run.load(Ordering::Relaxed);
+        let quit = Arc::new(AtomicBool::new(false));
+        let window_visible = Arc::new(AtomicBool::new(!start_minimized));
         #[cfg_attr(not(windows), allow(unused_mut))]
         let mut app = Self {
             profiles,
             state,
             dry_run,
+            quit,
+            window_visible,
             tab: Tab::Monitor,
             edits: HashMap::new(),
             repeat_edits: HashMap::new(),
@@ -133,8 +143,6 @@ impl MonitorApp {
             save_status: None,
             #[cfg(windows)]
             tray: None,
-            #[cfg(windows)]
-            activate_rx: None,
             last_persisted_active,
             #[cfg(windows)]
             last_icon: None,
@@ -143,6 +151,13 @@ impl MonitorApp {
         // Windows: build the tray from the current state and start the
         // activation waiter. A tray-build failure logs and falls back to a
         // plain window (tray = None).
+        //
+        // Tray and activation events are handled by global event handlers /
+        // a bridge thread rather than polled in `update()`: eframe's `update()`
+        // does not run while the window is hidden (no repaints), but the tray
+        // handlers run on the message-loop thread whenever a tray message
+        // arrives — so they work even while hidden. They act on the window
+        // directly through the egui `Context` (Clone + Send + Sync).
         #[cfg(windows)]
         {
             let active = !app.dry_run.load(Ordering::Relaxed);
@@ -150,10 +165,84 @@ impl MonitorApp {
             let tray = crate::tray::TrayHandle::new(st, active, crate::autostart::is_enabled())
                 .map_err(|e| log::warn!("tray unavailable: {e:#}"))
                 .ok();
+
+            if let Some(tray) = &tray {
+                let ctx = cc.egui_ctx.clone();
+                let ids = tray.ids();
+                let (show_id, active_id, autostart_id, quit_id) =
+                    (ids.show.clone(), ids.active.clone(), ids.autostart.clone(), ids.quit.clone());
+                let dry_run = app.dry_run.clone();
+                let window_visible = app.window_visible.clone();
+                let quit = app.quit.clone();
+
+                // Menu events (right-click menu items).
+                tray_icon::menu::MenuEvent::set_event_handler(Some(move |ev: tray_icon::menu::MenuEvent| {
+                    if ev.id == show_id {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                        window_visible.store(true, Ordering::Relaxed);
+                        ctx.request_repaint();
+                    } else if ev.id == active_id {
+                        let a = dry_run.load(Ordering::Relaxed);
+                        dry_run.store(!a, Ordering::Relaxed);
+                        ctx.request_repaint();
+                    } else if ev.id == autostart_id {
+                        if crate::autostart::is_enabled() {
+                            if let Err(e) = crate::autostart::disable() {
+                                log::warn!("autostart toggle failed: {e:#}");
+                            }
+                        } else if let Err(e) = crate::autostart::enable() {
+                            log::warn!("autostart toggle failed: {e:#}");
+                        }
+                        ctx.request_repaint();
+                    } else if ev.id == quit_id {
+                        quit.store(true, Ordering::Relaxed);
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                        ctx.request_repaint();
+                    }
+                }));
+
+                // Left-click the icon -> toggle window visibility. Only act on a
+                // single left-button release so hover/move/right-click don't fire.
+                let ctx = cc.egui_ctx.clone();
+                let window_visible = app.window_visible.clone();
+                tray_icon::TrayIconEvent::set_event_handler(Some(move |ev: tray_icon::TrayIconEvent| {
+                    if let tray_icon::TrayIconEvent::Click {
+                        button: tray_icon::MouseButton::Left,
+                        button_state: tray_icon::MouseButtonState::Up,
+                        ..
+                    } = ev
+                    {
+                        if window_visible.load(Ordering::Relaxed) {
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                            window_visible.store(false, Ordering::Relaxed);
+                        } else {
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                            window_visible.store(true, Ordering::Relaxed);
+                        }
+                        ctx.request_repaint();
+                    }
+                }));
+            }
+
+            // A second launch signals us to show the window. Bridge the
+            // activation channel to the window on its own thread so it works
+            // while hidden (update() would not run to drain it).
             let (tx, rx) = std::sync::mpsc::channel();
             crate::single_instance::spawn_activation_waiter(tx);
+            let ctx = cc.egui_ctx.clone();
+            let window_visible = app.window_visible.clone();
+            std::thread::spawn(move || {
+                while rx.recv().is_ok() {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                    window_visible.store(true, Ordering::Relaxed);
+                    ctx.request_repaint();
+                }
+            });
+
             app.tray = tray;
-            app.activate_rx = Some(rx);
         }
 
         app.start_consumer(cc.egui_ctx.clone());
@@ -243,49 +332,25 @@ const THUMB: [G13Key; 3] = [G13Key::Btn1, G13Key::Btn2, G13Key::Stick];
 
 impl eframe::App for MonitorApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // Close (X) / Minimize -> hide to tray instead of exiting.
+        // If update() is running, the window is (or is becoming) visible.
+        // Keep the atomic accurate in case the OS showed us by other means.
+        self.window_visible.store(true, Ordering::Relaxed);
+
+        // Close (X) -> hide to tray instead of exiting, unless a tray "Quit"
+        // requested the close (then let it through).
         if ctx.input(|i| i.viewport().close_requested()) {
-            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            if self.quit.load(Ordering::Relaxed) {
+                // allow the close — do nothing
+            } else {
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                self.window_visible.store(false, Ordering::Relaxed);
+            }
         }
+        // Minimize -> hide to tray.
         if ctx.input(|i| i.viewport().minimized == Some(true)) {
             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
-        }
-
-        // A second launch asked us to show the window.
-        #[cfg(windows)]
-        if let Some(rx) = &self.activate_rx {
-            if rx.try_recv().is_ok() {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
-                ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
-            }
-        }
-
-        // Drain tray menu events.
-        #[cfg(windows)]
-        if let Some(tray) = &mut self.tray {
-            while let Ok(ev) = tray_icon::menu::MenuEvent::receiver().try_recv() {
-                let ids = tray.ids();
-                if ev.id == ids.show {
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
-                } else if ev.id == ids.active {
-                    let now_active = self.dry_run.load(Ordering::Relaxed); // was dry-run -> go active
-                    self.dry_run.store(!now_active, Ordering::Relaxed);
-                } else if ev.id == ids.autostart {
-                    let r = if crate::autostart::is_enabled() { crate::autostart::disable() }
-                            else { crate::autostart::enable() };
-                    if let Err(e) = r { log::warn!("autostart toggle failed: {e:#}"); }
-                } else if ev.id == ids.quit {
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                }
-            }
-            // Left-click / double-click the icon -> toggle window visibility.
-            while let Ok(_ev) = tray_icon::TrayIconEvent::receiver().try_recv() {
-                // Any click event toggles; refine to Click/DoubleClick if desired after verifying the enum.
-                let visible = ctx.input(|i| i.viewport().focused).unwrap_or(false);
-                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(!visible));
-            }
+            self.window_visible.store(false, Ordering::Relaxed);
         }
 
         let snapshot = self.state.lock().unwrap().clone();
