@@ -17,7 +17,21 @@ mod single_instance;
 mod usb;
 
 use anyhow::Result;
-use std::path::PathBuf;
+
+/// Resolve the config path independent of the current working directory:
+/// (1) next to the executable, then (2) `config.toml` in the CWD (first found wins).
+/// This lets the app be auto-started at login (where the CWD is not the repo).
+fn resolve_config_path() -> std::path::PathBuf {
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let beside = dir.join("config.toml");
+            if beside.exists() {
+                return beside;
+            }
+        }
+    }
+    std::path::PathBuf::from("config.toml")
+}
 
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
@@ -32,11 +46,10 @@ fn main() -> Result<()> {
 
     env_logger::init();
 
-    let config = runtime::load_config_and_watch(PathBuf::from("config.toml"))?;
+    let config = runtime::load_config_and_watch(resolve_config_path())?;
 
     if headless {
-        let rx = runtime::spawn_usb_reader()?;
-        return runtime::run_headless(config, rx);
+        return runtime::run_headless(config);
     }
 
     // GUI: enforce single instance.

@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
+use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -21,21 +21,9 @@ pub fn load_config_and_watch(path: PathBuf) -> Result<Arc<RwLock<ProfileSet>>> {
     Ok(config)
 }
 
-/// Open the G13 and spawn the USB reader thread. Returns the event channel.
-/// Returns Err (does not exit) so callers — e.g. the GUI — can show the error.
-pub fn spawn_usb_reader() -> Result<Receiver<G13Event>> {
-    let (tx, rx) = mpsc::channel();
-    let reader = usb::UsbReader::open()?;
-    thread::spawn(move || {
-        if let Err(e) = reader.run(tx) {
-            log::error!("USB reader stopped: {e:#}");
-        }
-    });
-    Ok(rx)
-}
-
-/// The console driver: consume events, inject, release held keys on exit.
-pub fn run_headless(config: Arc<RwLock<ProfileSet>>, rx: Receiver<G13Event>) -> Result<()> {
+/// The console driver: own a USB supervisor that reconnects on disconnect, consume
+/// events, inject, release held keys on exit.
+pub fn run_headless(config: Arc<RwLock<ProfileSet>>) -> Result<()> {
     let injector = Box::new(injector::windows::WindowsInjector::new());
     let mut dispatcher = dispatcher::Dispatcher::new(config.clone(), injector);
 
@@ -44,6 +32,22 @@ pub fn run_headless(config: Arc<RwLock<ProfileSet>>, rx: Receiver<G13Event>) -> 
             log::warn!("joystick mouse mode is configured but not yet implemented; stick will be inert");
         }
     }
+
+    // Supervisor: owns tx and keeps it alive across reconnects, so the dispatch
+    // loop's channel never closes in normal operation. Reopens the G13 after a
+    // disconnect or a failed open, retrying every 2s.
+    let (tx, rx) = mpsc::channel::<G13Event>();
+    thread::spawn(move || loop {
+        match usb::UsbReader::open() {
+            Ok(reader) => {
+                log::info!("G13 connected");
+                let _ = reader.run(tx.clone());
+                log::warn!("G13 disconnected — retrying");
+            }
+            Err(e) => log::warn!("G13 open failed: {e:#}"),
+        }
+        thread::sleep(Duration::from_secs(2));
+    });
 
     log::info!("g13-driver running (headless) — press Ctrl+C to stop");
 
@@ -56,6 +60,7 @@ pub fn run_headless(config: Arc<RwLock<ProfileSet>>, rx: Receiver<G13Event>) -> 
                 dispatcher.tick(Instant::now());
             }
             Err(RecvTimeoutError::Timeout) => dispatcher.tick(Instant::now()),
+            // The supervisor keeps tx alive, so this only fires if it died: exit safely.
             Err(RecvTimeoutError::Disconnected) => break,
         }
     }

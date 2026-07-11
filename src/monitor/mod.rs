@@ -10,7 +10,6 @@ use crate::device_state::{Connection, DeviceState};
 use crate::dispatcher::Dispatcher;
 use crate::injector::{KeyCombo, key_map::build_key_map, windows::WindowsInjector};
 use crate::protocol::{G13Event, G13Key, MKey};
-use crate::runtime;
 
 /// A combo is valid for the editor only if it parses AND its key is a known key
 /// (so `ctrl+zzz` is rejected here rather than silently failing at injection).
@@ -282,30 +281,56 @@ impl MonitorApp {
         app
     }
 
-    /// Attempt to open the G13 and spawn the consumer thread. Sets connection
-    /// status accordingly. Called at startup and on Retry (only while
-    /// disconnected, so no second reader races the first).
+    /// Start the USB supervisor + the event consumer. Called ONCE at startup.
+    ///
+    /// The supervisor thread owns `tx` (kept alive across reconnects) and the
+    /// shared state + ctx: it opens the G13, marks Connected, blocks in
+    /// `reader.run` until disconnect, marks Disconnected, then retries every 2s.
+    /// Because it holds `tx`, the consumer's channel never closes, so a
+    /// disconnect/reconnect cycle does not tear down the consumer.
     fn start_consumer(&self, ctx: egui::Context) {
-        match runtime::spawn_usb_reader() {
-            Ok(rx) => {
-                self.state.lock().unwrap().connection = Connection::Connected;
-                let injector = Box::new(WindowsInjector::new());
-                let dispatcher = Dispatcher::new(self.profiles.clone(), injector);
-                let state = self.state.clone();
-                let dry_run = self.dry_run.clone();
-                std::thread::spawn(move || consumer_loop(rx, dispatcher, state, dry_run, ctx));
-            }
-            Err(e) => {
-                self.state.lock().unwrap().connection = Connection::Disconnected(format!("{e:#}"));
-            }
+        let (tx, rx) = std::sync::mpsc::channel();
+
+        // Supervisor: owns connection state and reconnects automatically.
+        {
+            let state = self.state.clone();
+            let ctx = ctx.clone();
+            std::thread::spawn(move || loop {
+                match crate::usb::UsbReader::open() {
+                    Ok(reader) => {
+                        { state.lock().unwrap().connection = Connection::Connected; }
+                        ctx.request_repaint();
+                        let _ = reader.run(tx.clone()); // blocks until disconnect
+                        {
+                            state.lock().unwrap().connection =
+                                Connection::Disconnected("device disconnected".to_string());
+                        }
+                        ctx.request_repaint();
+                    }
+                    Err(e) => {
+                        { state.lock().unwrap().connection = Connection::Disconnected(format!("{e:#}")); }
+                        ctx.request_repaint();
+                    }
+                }
+                std::thread::sleep(std::time::Duration::from_secs(2));
+            });
         }
+
+        let injector = Box::new(WindowsInjector::new());
+        let dispatcher = Dispatcher::new(self.profiles.clone(), injector);
+        let state = self.state.clone();
+        let dry_run = self.dry_run.clone();
+        std::thread::spawn(move || consumer_loop(rx, dispatcher, state, dry_run, ctx));
     }
 }
 
 /// Drains the event stream: updates DeviceState for display always; injects via
-/// the dispatcher only when Active. A 50ms recv timeout lets us notice a
+/// the dispatcher only when Active. A short recv timeout lets us notice a
 /// Dry-run toggle promptly so an Active->Dry-run switch releases held keys even
-/// with no new events. Exits when the channel closes (device unplugged).
+/// with no new events. Connection state is owned by the supervisor (which keeps
+/// tx alive across reconnects), so the channel does not close on a mere
+/// disconnect; the Disconnected arm here is only a safety exit if the supervisor
+/// itself dies.
 fn consumer_loop(
     rx: Receiver<G13Event>,
     mut dispatcher: Dispatcher,
@@ -339,11 +364,10 @@ fn consumer_loop(
                 was_active = active;
                 dispatcher.tick(Instant::now());
             }
+            // Only reachable if the supervisor thread died; connection state is
+            // owned by the supervisor, so just release held keys and exit.
             Err(RecvTimeoutError::Disconnected) => {
                 dispatcher.release_held();
-                state.lock().unwrap().connection =
-                    Connection::Disconnected("device disconnected".to_string());
-                ctx.request_repaint();
                 return;
             }
         }
@@ -439,11 +463,6 @@ impl eframe::App for MonitorApp {
                 .map(|j| format!("joystick: {:?}, deadzone {}", j.mode, j.deadzone))
                 .unwrap_or_else(|| "joystick: disabled".to_string());
             ui.label(format!("config.toml · {joy}"));
-            if let Connection::Disconnected(_) = &snapshot.connection {
-                if ui.button("Retry connection").clicked() {
-                    self.start_consumer(ctx.clone());
-                }
-            }
         });
 
         egui::SidePanel::left("nav").resizable(false).min_width(104.0).show(ctx, |ui| {
