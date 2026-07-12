@@ -1,0 +1,113 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+    paths: [version.txt]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      tag: ${{ steps.v.outputs.tag }}
+      should_release: ${{ steps.v.outputs.should_release }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read version, guard, check existing release
+        id: v
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          bash ci/check-version.sh
+          VERSION="$(tr -d '[:space:]' < version.txt)"
+          TAG="v$VERSION"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "release $TAG already exists — skipping"
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    needs: prepare
+    if: needs.prepare.outputs.should_release == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: windows-x64, os: windows-latest, toolchain: stable-x86_64-pc-windows-gnu }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: MinGW-w64 gcc (for rusb/libusb)
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          install: mingw-w64-x86_64-gcc
+          update: false
+      - name: Put MinGW on PATH
+        shell: bash
+        run: echo "$(cygpath -w /mingw64/bin)" >> "$GITHUB_PATH"
+      - name: Install GNU Rust toolchain
+        shell: bash
+        run: |
+          rustup toolchain install ${{ matrix.toolchain }} --profile minimal
+          rustup default ${{ matrix.toolchain }}
+      - name: Cache cargo + target
+        uses: Swatinem/rust-cache@v2
+      - name: Build (release)
+        shell: bash
+        run: cargo build --release
+      - name: Package bundle + SHA256
+        shell: bash
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+          NAME: ${{ matrix.name }}
+        run: |
+          STAGE="g13-driver-v${VERSION}-${NAME}"
+          mkdir "$STAGE"
+          cp target/release/g13-driver.exe "$STAGE"/
+          cp config.toml "$STAGE"/
+          cp -r profiles "$STAGE"/
+          cp LICENSE "$STAGE"/
+          cp packaging/README.txt "$STAGE"/
+          7z a "${STAGE}.zip" "$STAGE" >/dev/null
+          sha256sum "${STAGE}.zip" > "${STAGE}.zip.sha256"
+          ls -l "${STAGE}.zip" "${STAGE}.zip.sha256"
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: |
+            g13-driver-v*-*.zip
+            g13-driver-v*-*.zip.sha256
+
+  publish:
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.prepare.outputs.tag }}
+          name: ${{ needs.prepare.outputs.tag }}
+          generate_release_notes: true
+          files: |
+            dist/*.zip
+            dist/*.zip.sha256
