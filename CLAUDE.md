@@ -62,6 +62,17 @@ RUST_LOG=debug cargo run   # verbose logging (env_logger)
 The full dependency tree (incl. building libusb) takes ~1–2 min on a cold build; warm
 builds are a few seconds.
 
+## Releases (CI)
+
+- CI (`.github/workflows/ci.yml`) builds + tests every push/PR to `main` on `windows-latest`
+  with the GNU toolchain + MinGW gcc.
+- `version.txt` (repo root, bare semver) is the single source of truth for the release version;
+  `build.rs` stamps it into the binary as `env!("G13_VERSION")`. It MUST equal `Cargo.toml`'s
+  `[package] version` — `ci/check-version.sh` fails the build otherwise.
+- To cut a release: bump BOTH `version.txt` and `Cargo.toml` to the same new semver in one commit
+  on `main`. `.github/workflows/release.yml` then tags `vX.Y.Z` and publishes a GitHub Release with
+  the zip bundle (`g13-driver-vX.Y.Z-windows-x64.zip`) + `.sha256`. Re-runs are idempotent.
+
 ## Architecture
 
 Layered so platform-specific code is isolated behind a trait — the future Linux port is a
