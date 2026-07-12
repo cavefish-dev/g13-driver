@@ -5,7 +5,6 @@ compile_error!("g13-driver v0.1 targets Windows only; Linux support is planned f
 
 mod autostart;
 mod config;
-mod tray;
 mod device_state;
 mod dispatcher;
 mod injector;
@@ -14,6 +13,7 @@ mod monitor;
 mod protocol;
 mod runtime;
 mod single_instance;
+mod tray;
 mod usb;
 
 use anyhow::Result;

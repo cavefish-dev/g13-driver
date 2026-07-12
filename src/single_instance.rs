@@ -22,11 +22,18 @@ pub enum Acquired {
 
 pub struct Guard {
     mutex: HANDLE,
+    /// The activation event, created up front so a second launch during our
+    /// startup window can already `OpenEventW` it (owned here so it is closed
+    /// on exit). Null only on the fail-open path.
+    event: HANDLE,
 }
 
 impl Drop for Guard {
     fn drop(&mut self) {
-        unsafe { CloseHandle(self.mutex); }
+        unsafe {
+            if !self.event.is_null() { CloseHandle(self.event); }
+            if !self.mutex.is_null() { CloseHandle(self.mutex); }
+        }
     }
 }
 
@@ -36,13 +43,21 @@ pub fn acquire() -> Acquired {
     let mutex = unsafe { CreateMutexW(std::ptr::null(), 0, name.as_ptr()) };
     if mutex.is_null() {
         // Can't create the mutex — fail open (allow launch) rather than block the app.
-        return Acquired::First(Guard { mutex: std::ptr::null_mut() });
+        return Acquired::First(Guard {
+            mutex: std::ptr::null_mut(),
+            event: std::ptr::null_mut(),
+        });
     }
     if unsafe { GetLastError() } == ERROR_ALREADY_EXISTS {
         unsafe { CloseHandle(mutex); }
         return Acquired::Already;
     }
-    Acquired::First(Guard { mutex })
+    // We own the mutex: create the activation event now (auto-reset,
+    // non-signaled) so a second launch can signal us even during startup,
+    // before the waiter thread runs. A null event just disables activation.
+    let ev_name = wide_vec("Local\\g13-driver-activate");
+    let event = unsafe { CreateEventW(std::ptr::null(), 0, 0, ev_name.as_ptr()) };
+    Acquired::First(Guard { mutex, event })
 }
 
 /// Ask the running instance to show its window.
@@ -57,17 +72,28 @@ pub fn signal_existing() {
 
 /// Spawn a waiter that fires `on_activate` whenever a later launch pings the event.
 /// Call once, from the first instance, after the window exists.
+///
+/// The activation event is created up front in `acquire()` (and owned by the
+/// `Guard`), so here we only *open* it for wait access. This closes the race
+/// where a second launch during startup would find no event to signal.
 pub fn spawn_activation_waiter(on_activate: Sender<()>) {
     let name = wide_vec("Local\\g13-driver-activate");
-    let ev = unsafe { CreateEventW(std::ptr::null(), 0, 0, name.as_ptr()) };
+    // 0x0010_0000 = SYNCHRONIZE (wait access). Constant lives under
+    // Storage::FileSystem in windows-sys 0.59, so use the literal to keep the
+    // Threading-access-rights type from OpenEventW's signature.
+    let ev = unsafe { OpenEventW(0x0010_0000, 0, name.as_ptr()) };
     if ev.is_null() { return; }
     // Transmute HANDLE (*mut c_void) to usize so the closure is Send.
     // SAFETY: the event handle is valid and used read-only for waiting.
     let ev_bits = ev as usize;
-    std::thread::spawn(move || loop {
+    std::thread::spawn(move || {
         let handle = ev_bits as HANDLE;
-        let r = unsafe { WaitForSingleObject(handle, INFINITE) };
-        if r != 0 { break; } // WAIT_OBJECT_0 == 0; anything else -> stop
-        if on_activate.send(()).is_err() { break; }
+        loop {
+            let r = unsafe { WaitForSingleObject(handle, INFINITE) };
+            if r != 0 { break; } // WAIT_OBJECT_0 == 0; anything else -> stop
+            if on_activate.send(()).is_err() { break; }
+        }
+        // Close the handle this thread opened once the loop ends.
+        unsafe { CloseHandle(handle); }
     });
 }

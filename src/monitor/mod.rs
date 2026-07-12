@@ -25,9 +25,16 @@ fn combo_valid(s: &str, valid_keys: &HashSet<String>) -> bool {
 
 #[cfg(windows)]
 fn find_main_window() -> isize {
-    use windows_sys::Win32::UI::WindowsAndMessaging::FindWindowW;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{FindWindowW, GetWindowThreadProcessId};
+    use windows_sys::Win32::System::Threading::GetCurrentProcessId;
     let title: Vec<u16> = "G13 Monitor\0".encode_utf16().collect();
-    unsafe { FindWindowW(std::ptr::null(), title.as_ptr()) as isize }
+    let hwnd = unsafe { FindWindowW(std::ptr::null(), title.as_ptr()) };
+    if hwnd.is_null() { return 0; }
+    // Scope to our own process: an unrelated window titled "G13 Monitor" must
+    // not receive our ShowWindow/WM_CLOSE.
+    let mut pid: u32 = 0;
+    unsafe { GetWindowThreadProcessId(hwnd, &mut pid); }
+    if pid == unsafe { GetCurrentProcessId() } { hwnd as isize } else { 0 }
 }
 
 #[cfg(windows)]
@@ -233,8 +240,8 @@ impl MonitorApp {
                         window_visible.store(visible, Ordering::Relaxed);
                         ctx.request_repaint();
                     } else if ev.id == active_id {
-                        let a = dry_run.load(Ordering::Relaxed);
-                        dry_run.store(!a, Ordering::Relaxed);
+                        let dry = dry_run.load(Ordering::Relaxed);
+                        dry_run.store(!dry, Ordering::Relaxed);
                         ctx.request_repaint();
                     } else if ev.id == autostart_id {
                         if crate::autostart::is_enabled() {
