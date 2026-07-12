@@ -46,6 +46,9 @@ The tray/eframe integration needed several rounds of hardware debugging:
 - Tray icon does not visually refresh while the window is hidden (functional state is correct; it
   catches up when shown) — because eframe `update()` is paused while hidden.
 - Release held keys on USB disconnect (a G-key held at unplug could stick until next interaction).
+- Capture the real window `HWND` from eframe instead of `FindWindowW` by title (currently
+  process-scoped, which is safe; a captured handle would be fully robust even against a same-process
+  same-title window).
 - Toast/balloon notifications; profile switching from the tray.
 - Next MVP sub-projects: (#2) GitHub Actions CI driven by a `version.txt` semver file that triggers
   releases; (#3) auto-update pulling builds from GitHub Releases.
