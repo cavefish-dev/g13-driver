@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: windows-x64, os: windows-latest, toolchain: stable-x86_64-pc-windows-gnu }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Version drift guard
+        shell: bash
+        run: bash ci/check-version.sh
+
+      - name: MinGW-w64 gcc (for rusb/libusb)
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          install: mingw-w64-x86_64-gcc
+          update: false
+      - name: Put MinGW on PATH
+        shell: bash
+        run: echo "$(cygpath -w /mingw64/bin)" >> "$GITHUB_PATH"
+
+      - name: Install GNU Rust toolchain
+        shell: bash
+        run: |
+          rustup toolchain install ${{ matrix.toolchain }} --profile minimal
+          rustup default ${{ matrix.toolchain }}
+          rustc -vV
+          gcc --version
+
+      - name: Cache cargo + target
+        uses: Swatinem/rust-cache@v2
+
+      - name: Test
+        shell: bash
+        run: cargo test
+
+      - name: Build (release)
+        shell: bash
+        run: cargo build --release
