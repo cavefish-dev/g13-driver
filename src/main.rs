@@ -45,6 +45,7 @@ fn main() -> Result<()> {
     }
 
     env_logger::init();
+    log::info!("g13-driver v{}", env!("G13_VERSION"));
 
     let config = runtime::load_config_and_watch(resolve_config_path())?;
 
@@ -69,4 +70,14 @@ fn main() -> Result<()> {
     }
     #[cfg(not(windows))]
     monitor::run(config, minimized)
+}
+
+#[cfg(test)]
+mod version_tests {
+    #[test]
+    fn binary_version_matches_version_txt() {
+        let file = std::fs::read_to_string("version.txt").expect("version.txt at crate root");
+        assert_eq!(env!("G13_VERSION"), file.trim());
+        assert!(!env!("G13_VERSION").is_empty());
+    }
 }
