@@ -14,6 +14,7 @@ mod protocol;
 mod runtime;
 mod single_instance;
 mod tray;
+mod update;
 mod usb;
 
 use anyhow::Result;
