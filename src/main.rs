@@ -38,6 +38,7 @@ fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
     let headless = args.iter().any(|a| a == "--headless");
     let minimized = args.iter().any(|a| a == "--minimized");
+    let updated = args.iter().any(|a| a == "--updated");
 
     #[cfg(windows)]
     if headless {
@@ -57,13 +58,17 @@ fn main() -> Result<()> {
     // GUI: enforce single instance.
     #[cfg(windows)]
     {
-        match single_instance::acquire() {
+        let acq = if updated {
+            single_instance::acquire_retry(std::time::Duration::from_secs(10))
+        } else {
+            single_instance::acquire()
+        };
+        match acq {
             single_instance::Acquired::Already => {
                 single_instance::signal_existing();
                 return Ok(());
             }
             single_instance::Acquired::First(guard) => {
-                // Keep the guard alive for the whole GUI session.
                 let _guard = guard;
                 return monitor::run(config, minimized);
             }

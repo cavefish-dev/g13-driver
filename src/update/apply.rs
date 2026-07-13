@@ -57,8 +57,19 @@ fn extract_exe(zip_path: &Path, version: &str, dest: &Path) -> Result<()> {
     Ok(())
 }
 
-fn swap_and_restart(_new_exe: &Path) -> Result<()> {
-    bail!("swap_and_restart not implemented yet")
+/// Replace the running exe with `new_exe`, relaunch (with `--updated`), and exit
+/// so the new process can take over the single-instance mutex.
+fn swap_and_restart(new_exe: &Path) -> Result<()> {
+    self_replace::self_replace(new_exe).context("self-replace failed")?;
+    let _ = std::fs::remove_file(new_exe);
+    let current = std::env::current_exe().context("current_exe")?;
+    std::process::Command::new(current)
+        .arg("--updated")
+        .spawn()
+        .context("relaunch failed")?;
+    // Exit the old process; the OS releases the single-instance mutex on exit, and
+    // the relaunched `--updated` process retries acquiring it.
+    std::process::exit(0);
 }
 
 /// Download the update, verify its SHA-256, extract the new exe, then swap+restart.

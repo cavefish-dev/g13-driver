@@ -60,6 +60,24 @@ pub fn acquire() -> Acquired {
     Acquired::First(Guard { mutex, event })
 }
 
+/// Like `acquire`, but if another instance still holds the mutex, retry until it
+/// releases (e.g. an updated process waiting for the old one to exit) or `max_wait`
+/// elapses. Used on relaunch after a self-update.
+pub fn acquire_retry(max_wait: std::time::Duration) -> Acquired {
+    let start = std::time::Instant::now();
+    loop {
+        match acquire() {
+            Acquired::First(g) => return Acquired::First(g),
+            Acquired::Already => {
+                if start.elapsed() >= max_wait {
+                    return Acquired::Already;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(200));
+            }
+        }
+    }
+}
+
 /// Ask the running instance to show its window.
 pub fn signal_existing() {
     let name = wide_vec("Local\\g13-driver-activate");
