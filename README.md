@@ -71,7 +71,8 @@ Everything is done in the GUI — you never have to touch a file:
 - **Bindings tab:** click a key row, type the key or shortcut (e.g. `ctrl+c`), tick **repeat** to make
   it auto-repeat while held, then **Save**.
 - **Profiles tab:** M1/M2/M3 each load a profile; press the M-key (or click the slot) to switch.
-- **Joystick / auto-repeat:** joystick→WASD and repeat timing are configurable too.
+- **Joystick / auto-repeat:** joystick→WASD and per-binding auto-repeat (the **repeat** checkbox) are
+  set in the GUI; global repeat timing (`delay_ms`/`interval_ms`) lives in `config.toml` (see the reference).
 
 Power users can hand-edit the TOML config files next to the exe — see
 **[docs/configuration.md](docs/configuration.md)** for the full reference.
@@ -97,6 +98,7 @@ libusb):
 
 ```sh
 rustup default stable-x86_64-pc-windows-gnu
+# A MinGW-w64 gcc must be on PATH (e.g. MSYS2's mingw64 or Strawberry Perl) — see CONTRIBUTING.md.
 cargo test
 cargo build --release   # -> target/release/g13-driver.exe
 ```

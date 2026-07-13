@@ -47,7 +47,7 @@ STICK = "enter"
 G2 = true
 
 [joystick]      # optional: map the stick to WASD
-mode = "wasd"
+mode = "wasd"   # "wasd" is implemented; "mouse" parses but is not functional yet
 deadzone = 30   # 0-127; distance from center before a direction fires
 up = "w"
 down = "s"
@@ -63,7 +63,7 @@ case-insensitive.
 ### Binding syntax
 
 A binding is optional **modifiers** + one **key**: `modifier+modifier+key`. Modifiers: `ctrl`,
-`shift`, `alt`, `win` (aliases `control`, `windows`). Examples: `a`, `ctrl+c`, `ctrl+shift+z`,
+`shift`, `alt`, `win` (aliases `control`, `windows`, `super`). Examples: `a`, `ctrl+c`, `ctrl+shift+z`,
 `win+d`. A modifier **alone** is allowed (e.g. `shift`). Bindings are **hold-means-hold** (held
 while the G-key is held); multimedia keys are the tap-only exception.
 
@@ -72,7 +72,7 @@ while the G-key is held); multimedia keys are the tap-only exception.
 - **Letters:** `a`–`z`
 - **Digits:** `0`–`9`
 - **Function keys:** `f1`–`f24`
-- **Modifiers:** `ctrl` (`control`), `shift`, `alt`, `win` (`windows`)
+- **Modifiers:** `ctrl` (`control`), `shift`, `alt`, `win` (`windows`, `super`)
 - **Editing / navigation:** `enter` (`return`), `esc` (`escape`), `space`, `tab`, `backspace`,
   `delete`, `insert`, `home`, `end`, `pageup`, `pagedown`, `up`, `down`, `left`, `right`
 - **Locks / misc:** `capslock`, `printscreen`, `pause`, `numlock`, `scrolllock`
