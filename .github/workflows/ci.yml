@@ -15,14 +15,14 @@ jobs:
           - { name: windows-x64, os: windows-latest, toolchain: stable-x86_64-pc-windows-gnu }
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Version drift guard
         shell: bash
         run: bash ci/check-version.sh
 
       - name: MinGW-w64 gcc (for rusb/libusb)
-        uses: msys2/setup-msys2@v2
+        uses: msys2/setup-msys2@66cd2cce69caa17b53920067426061ca1de3a884 # v2
         with:
           msystem: MINGW64
           install: mingw-w64-x86_64-gcc
@@ -40,7 +40,7 @@ jobs:
           gcc --version
 
       - name: Cache cargo + target
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
 
       - name: Test
         shell: bash

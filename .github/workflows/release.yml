@@ -20,7 +20,7 @@ jobs:
       tag: ${{ steps.v.outputs.tag }}
       should_release: ${{ steps.v.outputs.should_release }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - name: Read version, guard, check existing release
         id: v
         env:
@@ -49,9 +49,9 @@ jobs:
           - { name: windows-x64, os: windows-latest, toolchain: stable-x86_64-pc-windows-gnu }
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - name: MinGW-w64 gcc (for rusb/libusb)
-        uses: msys2/setup-msys2@v2
+        uses: msys2/setup-msys2@66cd2cce69caa17b53920067426061ca1de3a884 # v2
         with:
           msystem: MINGW64
           install: mingw-w64-x86_64-gcc
@@ -65,7 +65,7 @@ jobs:
           rustup toolchain install ${{ matrix.toolchain }} --profile minimal
           rustup default ${{ matrix.toolchain }}
       - name: Cache cargo + target
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
       - name: Build (release)
         shell: bash
         run: cargo build --release
@@ -86,7 +86,7 @@ jobs:
           sha256sum "${STAGE}.zip" > "${STAGE}.zip.sha256"
           ls -l "${STAGE}.zip" "${STAGE}.zip.sha256"
       - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ${{ matrix.name }}
           path: |
@@ -101,12 +101,12 @@ jobs:
       contents: write
     steps:
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           path: dist
           merge-multiple: true
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           tag_name: ${{ needs.prepare.outputs.tag }}
           name: ${{ needs.prepare.outputs.tag }}
