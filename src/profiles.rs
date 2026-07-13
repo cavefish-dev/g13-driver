@@ -118,6 +118,33 @@ pub fn delete(dir: &Path, filename: &str) -> Result<()> {
     Ok(())
 }
 
+use crate::protocol::MKey;
+
+/// What deleting a profile entails: which M2/M3 slots must be cleared.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeletionPlan {
+    pub unassign: Vec<MKey>,
+}
+
+/// Decide whether `filename` may be deleted. `slots` is `[m1, m2, m3]` filenames.
+/// Refuses when bound to M1 or when it is the last profile in the folder.
+pub fn deletion_plan(
+    filename: &str,
+    slots: [Option<&str>; 3],
+    total_profiles: usize,
+) -> Result<DeletionPlan, String> {
+    if total_profiles <= 1 {
+        return Err("Can't delete the only profile.".to_string());
+    }
+    if slots[0] == Some(filename) {
+        return Err("This profile is assigned to M1. Reassign M1 first.".to_string());
+    }
+    let mut unassign = Vec::new();
+    if slots[1] == Some(filename) { unassign.push(MKey::M2); }
+    if slots[2] == Some(filename) { unassign.push(MKey::M3); }
+    Ok(DeletionPlan { unassign })
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CopyReport {
     pub copied: usize,
@@ -151,6 +178,35 @@ pub fn copy_into(src_dir: &Path, dst_dir: &Path) -> Result<CopyReport> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::protocol::MKey;
+
+    #[test]
+    fn deletion_refused_when_bound_to_m1() {
+        let err = deletion_plan("basic.toml",
+            [Some("basic.toml"), Some("media.toml"), None], 2).unwrap_err();
+        assert!(err.to_lowercase().contains("m1"));
+    }
+
+    #[test]
+    fn deletion_refused_when_last_profile() {
+        let err = deletion_plan("only.toml",
+            [Some("only.toml"), None, None], 1).unwrap_err();
+        assert!(err.to_lowercase().contains("only"));
+    }
+
+    #[test]
+    fn deletion_unassigns_m2_and_m3() {
+        let plan = deletion_plan("media.toml",
+            [Some("basic.toml"), Some("media.toml"), Some("media.toml")], 2).unwrap();
+        assert_eq!(plan.unassign, vec![MKey::M2, MKey::M3]);
+    }
+
+    #[test]
+    fn deletion_of_unassigned_profile_is_clean() {
+        let plan = deletion_plan("extra.toml",
+            [Some("basic.toml"), Some("media.toml"), None], 3).unwrap();
+        assert!(plan.unassign.is_empty());
+    }
 
     fn tmp(tag: &str) -> std::path::PathBuf {
         let d = std::env::temp_dir().join(format!("g13-prof-{tag}"));
