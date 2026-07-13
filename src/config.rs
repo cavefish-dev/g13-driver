@@ -297,6 +297,42 @@ impl ProfileSet {
 
     pub fn start_active(&self) -> bool { self.start_active }
 
+    /// Set (`Some`) or clear (`None`) an M-slot in the manifest, preserving all other
+    /// keys and comments. MR is a no-op.
+    pub fn persist_slot(&self, key: MKey, filename: Option<&str>) -> Result<()> {
+        use toml_edit::{DocumentMut, value as toml_value};
+        let slot = match key {
+            MKey::M1 => "m1",
+            MKey::M2 => "m2",
+            MKey::M3 => "m3",
+            MKey::MR => return Ok(()),
+        };
+        let text = std::fs::read_to_string(&self.config_path)
+            .with_context(|| format!("failed to read {}", self.config_path.display()))?;
+        let mut doc = text.parse::<DocumentMut>()
+            .with_context(|| format!("failed to parse {}", self.config_path.display()))?;
+        match filename {
+            Some(name) => { doc[slot] = toml_value(name); }
+            None => { doc.as_table_mut().remove(slot); }
+        }
+        std::fs::write(&self.config_path, doc.to_string())
+            .with_context(|| format!("failed to write {}", self.config_path.display()))?;
+        Ok(())
+    }
+
+    /// Set `profiles_dir` in the manifest, preserving all other keys and comments.
+    pub fn persist_profiles_dir(&self, dir: &Path) -> Result<()> {
+        use toml_edit::{DocumentMut, value as toml_value};
+        let text = std::fs::read_to_string(&self.config_path)
+            .with_context(|| format!("failed to read {}", self.config_path.display()))?;
+        let mut doc = text.parse::<DocumentMut>()
+            .with_context(|| format!("failed to parse {}", self.config_path.display()))?;
+        doc["profiles_dir"] = toml_value(dir.display().to_string());
+        std::fs::write(&self.config_path, doc.to_string())
+            .with_context(|| format!("failed to write {}", self.config_path.display()))?;
+        Ok(())
+    }
+
     /// Write `[app] start_active` into the manifest, preserving every other key and
     /// comment (format-preserving via toml_edit). Best-effort; callers log on error.
     pub fn persist_start_active(&self, value: bool) -> Result<()> {
@@ -591,6 +627,53 @@ mod profileset_tests {
             "profiles_dir = \"profiles\"\nm1 = \"default.toml\"\n[app]\nstart_active = true\n");
         let set = ProfileSet::load(&d.join("config.toml")).unwrap();
         assert!(set.start_active());
+    }
+
+    #[test]
+    fn persist_slot_sets_and_clears_preserving_others() {
+        let d = tmp("persist-slot");
+        write(&d.join("profiles"), "default.toml", "[keys]\nG1 = \"a\"\n");
+        write(&d.join("profiles"), "media.toml", "[keys]\nG1 = \"space\"\n");
+        write(&d, "config.toml",
+            "# manifest\nprofiles_dir = \"profiles\"\nm1 = \"default.toml\"\nm2 = \"media.toml\"\n");
+        let set = ProfileSet::load(&d.join("config.toml")).unwrap();
+
+        // Set m2 -> default.toml, clear m3 (absent -> stays absent, no error).
+        set.persist_slot(MKey::M2, Some("default.toml")).unwrap();
+        set.persist_slot(MKey::M3, None).unwrap();
+
+        let text = std::fs::read_to_string(d.join("config.toml")).unwrap();
+        assert!(text.contains("m2 = \"default.toml\""));
+        assert!(text.contains("# manifest"), "comment preserved");
+        assert!(text.contains("m1 = \"default.toml\""), "m1 preserved");
+        assert!(!text.contains("m3 ="), "m3 stays absent");
+    }
+
+    #[test]
+    fn persist_slot_clear_removes_existing_key() {
+        let d = tmp("persist-clear");
+        write(&d.join("profiles"), "default.toml", "[keys]\nG1 = \"a\"\n");
+        write(&d, "config.toml",
+            "profiles_dir = \"profiles\"\nm1 = \"default.toml\"\nm2 = \"default.toml\"\n");
+        let set = ProfileSet::load(&d.join("config.toml")).unwrap();
+        set.persist_slot(MKey::M2, None).unwrap();
+        let text = std::fs::read_to_string(d.join("config.toml")).unwrap();
+        assert!(!text.contains("m2 ="), "m2 removed");
+        assert!(text.contains("m1 = \"default.toml\""));
+    }
+
+    #[test]
+    fn persist_profiles_dir_updates_and_reloads() {
+        let d = tmp("persist-dir");
+        std::fs::create_dir_all(d.join("elsewhere")).unwrap();
+        write(&d.join("profiles"), "default.toml", "[keys]\nG1 = \"a\"\n");
+        write(&d.join("elsewhere"), "default.toml", "[keys]\nG1 = \"b\"\n");
+        write(&d, "config.toml", "profiles_dir = \"profiles\"\nm1 = \"default.toml\"\n");
+        let set = ProfileSet::load(&d.join("config.toml")).unwrap();
+        set.persist_profiles_dir(&d.join("elsewhere")).unwrap();
+
+        let reloaded = ProfileSet::load(&d.join("config.toml")).unwrap();
+        assert_eq!(reloaded.active_profile().get_binding(crate::protocol::G13Key::G1), Some("b"));
     }
 
     #[test]
