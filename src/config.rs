@@ -145,6 +145,8 @@ impl Profile {
         self.key_bindings = bindings;
     }
 
+    // Schema read-accessor; exercised by tests, kept as the symmetric pair to set_meta_name.
+    #[allow(dead_code)]
     pub fn meta_name(&self) -> Option<&str> {
         self.meta_name.as_deref()
     }
@@ -383,19 +385,6 @@ impl ProfileSet {
 
     pub fn profiles_dir(&self) -> &std::path::Path { &self.profiles_dir }
 
-    /// All `.toml` files in the profiles folder (for the GUI browse list).
-    pub fn available(&self) -> Vec<String> {
-        let mut names = Vec::new();
-        if let Ok(entries) = std::fs::read_dir(&self.profiles_dir) {
-            for e in entries.flatten() {
-                if let Some(n) = e.file_name().to_str() {
-                    if n.ends_with(".toml") { names.push(n.to_string()); }
-                }
-            }
-        }
-        names
-    }
-
     /// The file path backing the active profile (profiles_dir + active filename;
     /// for a legacy single-profile config that resolves to the config file).
     ///
@@ -529,18 +518,6 @@ mod profileset_tests {
         let d = tmp("missing-m1");
         write(&d, "config.toml", "profiles_dir = \"profiles\"\nm1 = \"nope.toml\"\n");
         assert!(ProfileSet::load(&d.join("config.toml")).is_err());
-    }
-
-    #[test]
-    fn available_lists_toml_files() {
-        let d = tmp("available");
-        write(&d.join("profiles"), "default.toml", "[keys]\n");
-        write(&d.join("profiles"), "extra.toml", "[keys]\n");
-        write(&d, "config.toml", "profiles_dir = \"profiles\"\nm1 = \"default.toml\"\n");
-        let set = ProfileSet::load(&d.join("config.toml")).unwrap();
-        let mut avail = set.available();
-        avail.sort();
-        assert_eq!(avail, vec!["default.toml".to_string(), "extra.toml".to_string()]);
     }
 
     #[test]
