@@ -10,6 +10,7 @@ mod dispatcher;
 mod injector;
 mod joystick;
 mod monitor;
+mod profiles;
 mod protocol;
 mod runtime;
 mod single_instance;
