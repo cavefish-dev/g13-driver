@@ -168,6 +168,7 @@ pub struct MonitorApp {
     last_persisted_active: bool,
     #[cfg(windows)]
     last_icon: Option<crate::tray::IconState>,
+    update_status: std::sync::Arc<std::sync::Mutex<crate::update::UpdateStatus>>,
 }
 
 impl MonitorApp {
@@ -198,6 +199,7 @@ impl MonitorApp {
             last_persisted_active,
             #[cfg(windows)]
             last_icon: None,
+            update_status: std::sync::Arc::new(std::sync::Mutex::new(crate::update::UpdateStatus::Idle)),
         };
 
         // Windows: build the tray from the current state and start the
@@ -285,6 +287,7 @@ impl MonitorApp {
         }
 
         app.start_consumer(cc.egui_ctx.clone());
+        spawn_update_check(app.update_status.clone(), cc.egui_ctx.clone(), false);
         app
     }
 
@@ -379,6 +382,34 @@ fn consumer_loop(
             }
         }
     }
+}
+
+/// Run an update check on a background thread and store the result. A background
+/// (manual = false) check that fails goes silently to Idle; a manual check surfaces
+/// the error as Failed.
+fn spawn_update_check(
+    status: std::sync::Arc<std::sync::Mutex<crate::update::UpdateStatus>>,
+    ctx: egui::Context,
+    manual: bool,
+) {
+    std::thread::spawn(move || {
+        *status.lock().unwrap() = crate::update::UpdateStatus::Checking;
+        ctx.request_repaint();
+        let next = match crate::update::check() {
+            Ok(Some(u)) => crate::update::UpdateStatus::Available(u),
+            Ok(None) => crate::update::UpdateStatus::UpToDate,
+            Err(e) => {
+                log::warn!("update check failed: {e:#}");
+                if manual {
+                    crate::update::UpdateStatus::Failed("couldn't check for updates".into())
+                } else {
+                    crate::update::UpdateStatus::Idle
+                }
+            }
+        };
+        *status.lock().unwrap() = next;
+        ctx.request_repaint();
+    });
 }
 
 // Physical G13 key arrangement: rows of 7, 7, 5, 3. Each row is centered when
@@ -759,6 +790,40 @@ impl MonitorApp {
                     ui.colored_label(egui::Color32::from_rgb(220, 90, 90), format!("failed: {e:#}"));
                 }
             }
+        }
+        ui.add_space(10.0);
+        ui.separator();
+        ui.label(format!("Version: {}", env!("G13_VERSION")));
+        let status = self.update_status.lock().unwrap().clone();
+        match status {
+            crate::update::UpdateStatus::Checking => { ui.weak("Checking for updates…"); }
+            crate::update::UpdateStatus::UpToDate => { ui.weak("Up to date."); }
+            crate::update::UpdateStatus::Installing => { ui.weak("Updating… the app will restart."); }
+            crate::update::UpdateStatus::Failed(msg) => {
+                ui.colored_label(egui::Color32::from_rgb(220, 90, 90), msg);
+            }
+            crate::update::UpdateStatus::Available(u) => {
+                ui.colored_label(egui::Color32::from_rgb(95, 200, 130),
+                    format!("Update available: v{}", u.version));
+                #[cfg(windows)]
+                if ui.button("Update now").clicked() {
+                    let status = self.update_status.clone();
+                    let upd = u.clone();
+                    *status.lock().unwrap() = crate::update::UpdateStatus::Installing;
+                    std::thread::spawn(move || {
+                        if let Err(e) = crate::update::apply::install(&upd) {
+                            log::warn!("update failed: {e:#}");
+                            *status.lock().unwrap() =
+                                crate::update::UpdateStatus::Failed(format!("update failed: {e:#}"));
+                        }
+                        // On success install() self-restarts and never returns here.
+                    });
+                }
+            }
+            crate::update::UpdateStatus::Idle => {}
+        }
+        if ui.button("Check for updates").clicked() {
+            spawn_update_check(self.update_status.clone(), ui.ctx().clone(), true);
         }
         ui.add_space(6.0);
         ui.weak("Close or minimize hides to the tray; the driver keeps running. Quit from the tray to exit.");
