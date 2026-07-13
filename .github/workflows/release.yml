@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
     paths: [version.txt]
+  workflow_dispatch: {}   # manual trigger (e.g. re-publish the current version.txt release)
 
 permissions:
   contents: read
