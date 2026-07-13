@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Setup & configuration help
+    url: https://github.com/cavefish-dev/g13-driver#quick-start
+    about: The README and docs/configuration.md cover install and config.
