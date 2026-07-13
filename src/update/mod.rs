@@ -64,6 +64,28 @@ pub fn select_update(release: &ReleaseInfo, current: &str) -> Option<AvailableUp
     Some(AvailableUpdate { version: latest.to_string(), zip_url, sha256_url })
 }
 
+const RELEASES_LATEST: &str =
+    "https://api.github.com/repos/cavefish-dev/g13-driver/releases/latest";
+
+/// Fetch the latest-release JSON from GitHub (unauthenticated; requires a User-Agent).
+pub fn fetch_latest_json() -> anyhow::Result<String> {
+    let ua = format!("g13-driver/{}", env!("G13_VERSION"));
+    let body = ureq::get(RELEASES_LATEST)
+        .header("User-Agent", &ua)
+        .header("Accept", "application/vnd.github+json")
+        .call()?
+        .body_mut()
+        .read_to_string()?;
+    Ok(body)
+}
+
+/// Check GitHub for an update newer than this build. `Ok(None)` = up to date.
+pub fn check() -> anyhow::Result<Option<AvailableUpdate>> {
+    let json = fetch_latest_json()?;
+    let release = parse_release(&json)?;
+    Ok(select_update(&release, env!("G13_VERSION")))
+}
+
 /// GUI-facing update state (read by the Settings tab).
 #[derive(Debug, Clone)]
 pub enum UpdateStatus {
