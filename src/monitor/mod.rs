@@ -776,8 +776,8 @@ impl MonitorApp {
 
     fn assign_to_active(&mut self, filename: &str) {
         let active = self.profiles.read().unwrap().active();
-        let res = self.profiles.read().unwrap().persist_slot(active, Some(filename))
-            .and_then(|_| crate::runtime::reload_now(&self.profiles, &self.config_path));
+        let persisted = self.profiles.read().unwrap().persist_slot(active, Some(filename));
+        let res = persisted.and_then(|_| crate::runtime::reload_now(&self.profiles, &self.config_path));
         self.profiles_status = Some(match res {
             Ok(()) => format!("Assigned to {active:?}."),
             Err(e) => format!("Assign failed: {e}"),
