@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, RwLock};
 use std::thread;
@@ -7,6 +7,16 @@ use anyhow::Result;
 use crate::config::{JoystickMode, ProfileSet};
 use crate::protocol::G13Event;
 use crate::{dispatcher, injector, usb};
+
+/// Reload the ProfileSet from disk and swap it under the write lock, preserving the
+/// active M-key when its slot still resolves.
+pub fn reload_now(config: &Arc<RwLock<ProfileSet>>, config_path: &Path) -> Result<()> {
+    let active = config.read().unwrap().active();
+    let mut new = ProfileSet::load(config_path)?;
+    new.set_active(active); // no-op if that slot is now empty; stays on M1
+    *config.write().unwrap() = new;
+    Ok(())
+}
 
 /// Load config and spawn the hot-reload watcher thread. Returns the shared handle.
 pub fn load_config_and_watch(path: PathBuf) -> Result<Arc<RwLock<ProfileSet>>> {
@@ -69,6 +79,35 @@ pub fn run_headless(config: Arc<RwLock<ProfileSet>>) -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tmp(tag: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("g13-rt-{tag}"));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("profiles")).unwrap();
+        d
+    }
+
+    #[test]
+    fn reload_now_picks_up_disk_changes() {
+        let d = tmp("reload");
+        std::fs::write(d.join("profiles/default.toml"), "[keys]\nG1 = \"a\"\n").unwrap();
+        std::fs::write(d.join("config.toml"),
+            "profiles_dir = \"profiles\"\nm1 = \"default.toml\"\n").unwrap();
+        let cfg = std::sync::Arc::new(std::sync::RwLock::new(
+            ProfileSet::load(&d.join("config.toml")).unwrap()));
+
+        // Change the profile file on disk, then reload_now.
+        std::fs::write(d.join("profiles/default.toml"), "[keys]\nG1 = \"z\"\n").unwrap();
+        reload_now(&cfg, &d.join("config.toml")).unwrap();
+        assert_eq!(
+            cfg.read().unwrap().active_profile().get_binding(crate::protocol::G13Key::G1),
+            Some("z"));
+    }
+}
+
 fn watch_config(config: Arc<RwLock<ProfileSet>>, config_path: PathBuf, profiles_dir: PathBuf) {
     use notify::{Config as WatchConfig, Event, RecommendedWatcher, RecursiveMode, Watcher};
 
@@ -84,13 +123,21 @@ fn watch_config(config: Arc<RwLock<ProfileSet>>, config_path: PathBuf, profiles_
     // Also watch the profiles directory recursively (may equal config dir for legacy configs).
     let _ = watcher.watch(&profiles_dir, RecursiveMode::Recursive);
 
+    let mut watched_dir = profiles_dir;
     for result in rx {
         if result.is_ok() {
             let active = config.read().unwrap().active();
             match ProfileSet::load(&config_path) {
                 Ok(mut new) => {
                     new.set_active(active);
+                    let new_dir = new.profiles_dir().to_path_buf();
                     *config.write().unwrap() = new;
+                    if new_dir != watched_dir {
+                        let _ = watcher.unwatch(&watched_dir);
+                        let _ = watcher.watch(&new_dir, RecursiveMode::Recursive);
+                        watched_dir = new_dir;
+                        log::info!("watching profiles dir {}", watched_dir.display());
+                    }
                     log::info!("config reloaded");
                 }
                 Err(e) => log::warn!("config reload failed: {e:#}"),
