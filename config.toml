@@ -4,9 +4,8 @@
 #
 # (A legacy config with a bare [keys] table still works as a single M1 profile.)
 profiles_dir = "profiles"
-m1 = "default.toml"
-m2 = "game.toml"
-m3 = "media.toml"
+m1 = "basic.toml"
+m2 = "media.toml"
 
 # Auto-repeat timing (global). Uncomment to override the defaults below.
 # Per-binding on/off lives in each profile's [repeat] table (Bindings tab checkbox).

@@ -1,5 +1,8 @@
-# Default profile (M1) — general shortcuts.
+# Basic profile — general shortcuts.
 # A profile is a full binding set. Keys G1–G22; modifiers: ctrl, shift, alt, windows.
+
+[meta]
+name = "Basic"
 
 [keys]
 G1  = "ctrl+c"

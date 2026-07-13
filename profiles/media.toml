@@ -1,4 +1,7 @@
-# Media profile (M3) — playback / navigation. No joystick section (stick inert).
+# Media profile — playback / navigation. No joystick section (stick inert).
+
+[meta]
+name = "Media"
 
 [keys]
 G1 = "space"
