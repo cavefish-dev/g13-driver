@@ -12,9 +12,7 @@ semver  = "1"
 toml    = "0.8"
 toml_edit = "0.22"
 anyhow  = "1"
-sha2    = "0.11"
 ureq    = "3"
-zip     = { version = "8", default-features = false, features = ["deflate"] }
 log     = "0.4"
 env_logger = "0.11"
 notify  = "6"
@@ -31,3 +29,6 @@ windows-sys = { version = "0.59", features = [
 ] }
 winreg = "0.56"
 tray-icon = "0.24"
+# Used only by the Windows-only update apply step (src/update/apply.rs).
+sha2 = "0.11"
+zip = { version = "8", default-features = false, features = ["deflate"] }
