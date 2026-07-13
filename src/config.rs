@@ -188,6 +188,17 @@ impl Profile {
     }
 }
 
+impl Default for Profile {
+    fn default() -> Self {
+        Self {
+            key_bindings: HashMap::new(),
+            joystick: None,
+            repeat: HashMap::new(),
+            meta_name: None,
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct RawApp {
     #[serde(default)]
