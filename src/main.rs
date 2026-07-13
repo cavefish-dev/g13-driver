@@ -50,7 +50,8 @@ fn main() -> Result<()> {
     env_logger::init();
     log::info!("g13-driver v{}", env!("G13_VERSION"));
 
-    let config = runtime::load_config_and_watch(resolve_config_path())?;
+    let config_path = resolve_config_path();
+    let config = runtime::load_config_and_watch(config_path.clone())?;
 
     if headless {
         return runtime::run_headless(config);
@@ -71,12 +72,12 @@ fn main() -> Result<()> {
             }
             single_instance::Acquired::First(guard) => {
                 let _guard = guard;
-                return monitor::run(config, minimized);
+                return monitor::run(config, config_path, minimized);
             }
         }
     }
     #[cfg(not(windows))]
-    monitor::run(config, minimized)
+    monitor::run(config, config_path, minimized)
 }
 
 #[cfg(test)]
