@@ -4,8 +4,16 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use crate::protocol::{G13Key, MKey};
 
+#[derive(Debug, Deserialize, Serialize, Clone, Default)]
+pub(crate) struct RawMeta {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
 #[derive(Debug, Deserialize, Serialize, Clone)]
-pub struct RawConfig {
+pub(crate) struct RawConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub meta: Option<RawMeta>,
     #[serde(default)]
     pub keys: HashMap<String, String>,
     #[serde(default)]
@@ -81,6 +89,7 @@ pub struct Profile {
     key_bindings: HashMap<G13Key, String>,
     joystick: Option<JoystickConfig>,
     repeat: HashMap<G13Key, bool>,
+    meta_name: Option<String>,
 }
 
 impl Profile {
@@ -112,7 +121,12 @@ impl Profile {
             None => None,
         };
 
-        Ok(Self { key_bindings, joystick, repeat })
+        let meta_name = raw.meta
+            .and_then(|m| m.name)
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+
+        Ok(Self { key_bindings, joystick, repeat, meta_name })
     }
 
     pub fn get_binding(&self, key: G13Key) -> Option<&str> {
@@ -129,6 +143,14 @@ impl Profile {
 
     pub fn set_bindings(&mut self, bindings: HashMap<G13Key, String>) {
         self.key_bindings = bindings;
+    }
+
+    pub fn meta_name(&self) -> Option<&str> {
+        self.meta_name.as_deref()
+    }
+
+    pub fn set_meta_name(&mut self, name: Option<String>) {
+        self.meta_name = name.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
     }
 
     pub fn repeats(&self, key: G13Key) -> bool {
@@ -160,7 +182,8 @@ impl Profile {
             .filter(|(_, &v)| v)
             .map(|(k, _)| (format!("{k:?}"), true)) // Debug of G13Key: "G1".."Stick"
             .collect();
-        let raw = RawConfig { keys, joystick, repeat };
+        let meta = self.meta_name.clone().map(|name| RawMeta { name: Some(name) });
+        let raw = RawConfig { meta, keys, joystick, repeat };
         toml::to_string(&raw).context("failed to serialize profile")
     }
 }
@@ -585,6 +608,7 @@ mod tests {
 
     fn raw(pairs: &[(&str, &str)]) -> RawConfig {
         RawConfig {
+            meta: None,
             keys: pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
             joystick: None,
             repeat: HashMap::new(),
@@ -748,5 +772,37 @@ G3 = "f5"
         p.set_repeat(map);
         let toml = p.to_toml().unwrap();
         assert!(!toml.contains("[repeat]"));
+    }
+
+    #[test]
+    fn parses_meta_name() {
+        let src = "[meta]\nname = \"My Profile\"\n[keys]\nG1 = \"a\"\n";
+        let raw: RawConfig = toml::from_str(src).unwrap();
+        let p = Profile::from_raw(raw).unwrap();
+        assert_eq!(p.meta_name(), Some("My Profile"));
+    }
+
+    #[test]
+    fn meta_name_absent_is_none() {
+        let p = Profile::from_raw(raw(&[("G1", "a")])).unwrap();
+        assert_eq!(p.meta_name(), None);
+    }
+
+    #[test]
+    fn empty_meta_name_is_none() {
+        let src = "[meta]\nname = \"\"\n[keys]\nG1 = \"a\"\n";
+        let raw: RawConfig = toml::from_str(src).unwrap();
+        let p = Profile::from_raw(raw).unwrap();
+        assert_eq!(p.meta_name(), None);
+    }
+
+    #[test]
+    fn to_toml_round_trips_meta_name() {
+        let mut p = Profile::from_raw(raw(&[("G1", "a")])).unwrap();
+        p.set_meta_name(Some("Basic".to_string()));
+        let toml = p.to_toml().unwrap();
+        assert!(toml.contains("[meta]"));
+        let reloaded = Profile::from_raw(toml::from_str(&toml).unwrap()).unwrap();
+        assert_eq!(reloaded.meta_name(), Some("Basic"));
     }
 }

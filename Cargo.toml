@@ -29,6 +29,8 @@ windows-sys = { version = "0.59", features = [
 ] }
 winreg = "0.56"
 tray-icon = "0.24"
+# Native folder picker for the Profiles tab (src/monitor/mod.rs), Windows-only.
+rfd = "0.15"
 # Used only by the Windows-only update apply step (src/update/apply.rs).
 sha2 = "0.11"
 zip = { version = "8", default-features = false, features = ["deflate"] }
