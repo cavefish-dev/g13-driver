@@ -239,9 +239,10 @@ pub struct ProfileSet {
 }
 
 impl ProfileSet {
-    /// Load from the manifest at `config_path`. Manifest mode when a top-level
-    /// `m1` is present; otherwise the file is itself the single M1 profile
-    /// (legacy). Paths resolve relative to the config file's directory.
+    /// Load from the manifest at `config_path`. Manifest mode when any of
+    /// `profiles_dir`, `m1`, `m2`, or `m3` is present; otherwise the file is
+    /// itself the single M1 profile (legacy). Paths resolve relative to the
+    /// config file's directory.
     pub fn load(config_path: &Path) -> Result<Self> {
         let content = std::fs::read_to_string(config_path)
             .with_context(|| format!("failed to read config: {}", config_path.display()))?;

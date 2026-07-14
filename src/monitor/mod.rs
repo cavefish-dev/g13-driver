@@ -707,6 +707,7 @@ impl MonitorApp {
         // Deferred folder-bar actions (avoid &mut self inside these closures).
         let mut do_change_folder = false;
         let mut do_open_folder = false;
+        let mut do_unassign = false;
         ui.horizontal(|ui| {
             if ui.button("Change folder…").clicked() {
                 do_change_folder = true;
@@ -717,9 +718,13 @@ impl MonitorApp {
             if ui.button("New").clicked() {
                 self.name_prompt = Some(NamePrompt { kind: PromptKind::New, buffer: String::new() });
             }
+            if ui.button("Unassign").clicked() {
+                do_unassign = true;
+            }
         });
         if do_change_folder { self.change_folder(&dir); }
         if do_open_folder { open_folder(&dir); }
+        if do_unassign { self.unassign_active(); }
 
         ui.add_space(8.0);
 
@@ -759,7 +764,7 @@ impl MonitorApp {
         });
         match action {
             Some(Action::Assign(f)) => self.assign_to_active(&f),
-            Some(Action::BeginDelete(f)) => self.try_begin_delete(&f, &dir, &entries),
+            Some(Action::BeginDelete(f)) => self.try_begin_delete(&f),
             Some(Action::Prompt(p)) => self.name_prompt = Some(p),
             None => {}
         }
@@ -783,6 +788,16 @@ impl MonitorApp {
         });
     }
 
+    fn unassign_active(&mut self) {
+        let active = self.profiles.read().unwrap().active();
+        let cleared = self.profiles.read().unwrap().persist_slot(active, None);
+        let res = cleared.and_then(|_| crate::runtime::reload_now(&self.profiles, &self.config_path));
+        self.profiles_status = Some(match res {
+            Ok(()) => format!("Cleared {active:?}."),
+            Err(e) => format!("Unassign failed: {e}"),
+        });
+    }
+
     fn change_folder(&mut self, current: &std::path::Path) {
         #[cfg(windows)]
         {
@@ -803,7 +818,7 @@ impl MonitorApp {
         { let _ = current; }
     }
 
-    fn try_begin_delete(&mut self, filename: &str, _dir: &std::path::Path, _entries: &[crate::profiles::ProfileEntry]) {
+    fn try_begin_delete(&mut self, filename: &str) {
         self.pending_delete = Some(filename.to_string());
     }
 
