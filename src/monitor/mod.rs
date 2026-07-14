@@ -5,7 +5,7 @@ use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::time::{Duration, Instant};
 use anyhow::Result;
 use eframe::egui;
-use crate::config::ProfileSet;
+use crate::config::{ProfileSet, ProfileSource};
 use crate::device_state::{Connection, DeviceState};
 use crate::dispatcher::Dispatcher;
 use crate::injector::{KeyCombo, key_map::build_key_map, windows::WindowsInjector};
@@ -742,6 +742,11 @@ impl MonitorApp {
                     if ui.selectable_label(is_active_file, &e.display_name).clicked() {
                         action = Some(Action::Assign(e.filename.clone()));
                     }
+                    match (e.source, e.modified) {
+                        (ProfileSource::Github, false) => { ui.weak("GitHub"); }
+                        (ProfileSource::Github, true)  => { ui.weak("GitHub · edited"); }
+                        (ProfileSource::User, _) => {}
+                    }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui.small_button("Delete").clicked() {
                             action = Some(Action::BeginDelete(e.filename.clone()));
@@ -939,11 +944,28 @@ impl MonitorApp {
             self.save_status = None;
         }
 
+        // Read provenance flags while holding the lock briefly, then drop the lock
+        // before any further rendering or mutation.
+        let (is_github, is_modified) = {
+            let set = self.profiles.read().unwrap();
+            match set.active_profile() {
+                Some(profile) => (profile.source() == ProfileSource::Github, profile.modified()),
+                None => (false, false),
+            }
+        };
+
         ui.heading("Bindings");
         match &active_name {
             Some(n) => ui.label(format!("Editing profile: {n}")),
             None => ui.label("No profile loaded"),
         };
+        if is_github {
+            if is_modified {
+                ui.weak("From GitHub · edited — your changes differ from the downloaded version.");
+            } else {
+                ui.weak("From GitHub — your edits will mark this profile as edited.");
+            }
+        }
         ui.weak("Combo = optional modifiers (ctrl / shift / alt / win) + one key, held while \
                  the G-key is held. Examples: ctrl+c, ctrl+shift+z, win+d. Modifiers alone are \
                  allowed (e.g. shift, ctrl+shift). Keys: a-z, 0-9, f1-f24, enter, esc, space, \
