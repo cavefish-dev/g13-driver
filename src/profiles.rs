@@ -126,23 +126,15 @@ pub struct DeletionPlan {
     pub unassign: Vec<MKey>,
 }
 
-/// Decide whether `filename` may be deleted. `slots` is `[m1, m2, m3]` filenames.
-/// Refuses when bound to M1 or when it is the last profile in the folder.
-pub fn deletion_plan(
-    filename: &str,
-    slots: [Option<&str>; 3],
-    total_profiles: usize,
-) -> Result<DeletionPlan, String> {
-    if total_profiles <= 1 {
-        return Err("Can't delete the only profile.".to_string());
-    }
-    if slots[0] == Some(filename) {
-        return Err("This profile is assigned to M1. Reassign M1 first.".to_string());
-    }
-    let mut unassign = Vec::new();
-    if slots[1] == Some(filename) { unassign.push(MKey::M2); }
-    if slots[2] == Some(filename) { unassign.push(MKey::M3); }
-    Ok(DeletionPlan { unassign })
+/// Which M-slots must be cleared when `filename` is deleted (all that reference it).
+/// Deletion is always allowed — an empty slot set is a valid state.
+pub fn deletion_plan(filename: &str, slots: [Option<&str>; 3]) -> DeletionPlan {
+    let mkeys = [MKey::M1, MKey::M2, MKey::M3];
+    let unassign = slots.iter().zip(mkeys)
+        .filter(|(s, _)| **s == Some(filename))
+        .map(|(_, m)| m)
+        .collect();
+    DeletionPlan { unassign }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -181,30 +173,23 @@ mod tests {
     use crate::protocol::MKey;
 
     #[test]
-    fn deletion_refused_when_bound_to_m1() {
-        let err = deletion_plan("basic.toml",
-            [Some("basic.toml"), Some("media.toml"), None], 2).unwrap_err();
-        assert!(err.to_lowercase().contains("m1"));
-    }
-
-    #[test]
-    fn deletion_refused_when_last_profile() {
-        let err = deletion_plan("only.toml",
-            [Some("only.toml"), None, None], 1).unwrap_err();
-        assert!(err.to_lowercase().contains("only"));
-    }
-
-    #[test]
-    fn deletion_unassigns_m2_and_m3() {
+    fn deletion_unassigns_every_referencing_slot() {
         let plan = deletion_plan("media.toml",
-            [Some("basic.toml"), Some("media.toml"), Some("media.toml")], 2).unwrap();
+            [Some("basic.toml"), Some("media.toml"), Some("media.toml")]);
         assert_eq!(plan.unassign, vec![MKey::M2, MKey::M3]);
     }
 
     #[test]
-    fn deletion_of_unassigned_profile_is_clean() {
+    fn deletion_unassigns_m1_when_bound_there() {
+        let plan = deletion_plan("basic.toml",
+            [Some("basic.toml"), None, None]);
+        assert_eq!(plan.unassign, vec![MKey::M1]);
+    }
+
+    #[test]
+    fn deletion_of_unreferenced_profile_unassigns_nothing() {
         let plan = deletion_plan("extra.toml",
-            [Some("basic.toml"), Some("media.toml"), None], 3).unwrap();
+            [Some("basic.toml"), Some("media.toml"), None]);
         assert!(plan.unassign.is_empty());
     }
 

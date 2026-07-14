@@ -803,13 +803,8 @@ impl MonitorApp {
         { let _ = current; }
     }
 
-    fn try_begin_delete(&mut self, filename: &str, _dir: &std::path::Path, entries: &[crate::profiles::ProfileEntry]) {
-        let set = self.profiles.read().unwrap();
-        let slots = [set.name(MKey::M1), set.name(MKey::M2), set.name(MKey::M3)];
-        match crate::profiles::deletion_plan(filename, slots, entries.len()) {
-            Ok(_) => { drop(set); self.pending_delete = Some(filename.to_string()); }
-            Err(reason) => { drop(set); self.profiles_status = Some(reason); }
-        }
+    fn try_begin_delete(&mut self, filename: &str, _dir: &std::path::Path, _entries: &[crate::profiles::ProfileEntry]) {
+        self.pending_delete = Some(filename.to_string());
     }
 
     fn render_name_prompt(&mut self, ctx: &egui::Context, dir: &std::path::Path) {
@@ -873,15 +868,14 @@ impl MonitorApp {
         if confirm {
             let res: anyhow::Result<()> = (|| {
                 // Re-evaluate the plan against current state, then cascade unassigns.
-                let (slots_owned, total) = {
+                let slots_owned = {
                     let set = self.profiles.read().unwrap();
-                    ([set.name(MKey::M1).map(String::from),
-                      set.name(MKey::M2).map(String::from),
-                      set.name(MKey::M3).map(String::from)], entries.len())
+                    [set.name(MKey::M1).map(String::from),
+                     set.name(MKey::M2).map(String::from),
+                     set.name(MKey::M3).map(String::from)]
                 };
                 let slots = [slots_owned[0].as_deref(), slots_owned[1].as_deref(), slots_owned[2].as_deref()];
-                let plan = crate::profiles::deletion_plan(&filename, slots, total)
-                    .map_err(|e| anyhow::anyhow!(e))?;
+                let plan = crate::profiles::deletion_plan(&filename, slots);
                 {
                     let set = self.profiles.read().unwrap();
                     for m in &plan.unassign { set.persist_slot(*m, None)?; }
