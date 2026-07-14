@@ -3,6 +3,7 @@
 
 [meta]
 name = "Basic"
+source = "github"
 
 [keys]
 G1  = "ctrl+c"

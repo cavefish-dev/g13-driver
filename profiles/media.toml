@@ -2,6 +2,7 @@
 
 [meta]
 name = "Media"
+source = "github"
 
 [keys]
 G1 = "space"
