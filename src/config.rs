@@ -224,14 +224,14 @@ struct RawManifest {
 #[derive(Debug, Clone)]
 pub struct ProfileSet {
     profiles_dir: PathBuf,
-    m1: Profile,
+    m1: Option<Profile>,
     m2: Option<Profile>,
     m3: Option<Profile>,
     m1_name: Option<String>,
     m2_name: Option<String>,
     m3_name: Option<String>,
-    /// Invariant: always points at a populated slot (or M1). `set_active` refuses
-    /// empty slots, so `active_profile()`/`active_name()` stay coherent.
+    /// The selected M-slot. May point at an empty slot — `active_profile()` then
+    /// returns `None` and the driver injects nothing.
     active: MKey,
     autorepeat: AutoRepeat,
     config_path: PathBuf,
@@ -251,39 +251,41 @@ impl ProfileSet {
         let autorepeat = raw.autorepeat.map(AutoRepeat::from_raw).unwrap_or_default();
         let start_active = raw.app.as_ref().map(|a| a.start_active).unwrap_or(false);
 
-        if let Some(m1_name) = raw.m1 {
-            // Manifest mode.
+        // Manifest mode when ANY of profiles_dir/m1/m2/m3 is present.
+        let is_manifest = raw.profiles_dir.is_some() || raw.m1.is_some()
+            || raw.m2.is_some() || raw.m3.is_some();
+        if is_manifest {
             let dir = base.join(raw.profiles_dir.as_deref().unwrap_or("profiles"));
-            let m1 = Profile::load(&dir.join(&m1_name))
-                .with_context(|| format!("failed to load M1 profile {m1_name}"))?;
+            // Load a slot: None on missing name OR load failure. Keep the name even
+            // when the file failed to load, so the UI can show the broken assignment.
             let load_opt = |name: &Option<String>| -> (Option<Profile>, Option<String>) {
                 match name {
                     Some(n) => match Profile::load(&dir.join(n)) {
                         Ok(p) => (Some(p), Some(n.clone())),
-                        Err(e) => { log::warn!("skipping profile {n}: {e:#}"); (None, None) }
+                        Err(e) => { log::warn!("slot profile {n} not loaded: {e:#}"); (None, Some(n.clone())) }
                     },
                     None => (None, None),
                 }
             };
+            let (m1, m1_name) = load_opt(&raw.m1);
             let (m2, m2_name) = load_opt(&raw.m2);
             let (m3, m3_name) = load_opt(&raw.m3);
             Ok(Self {
                 profiles_dir: dir,
                 m1, m2, m3,
-                m1_name: Some(m1_name),
-                m2_name, m3_name,
+                m1_name, m2_name, m3_name,
                 active: MKey::M1,
                 autorepeat,
                 config_path: config_path.to_path_buf(),
                 start_active,
             })
         } else {
-            // Legacy: the config file is a single profile.
+            // Legacy: the file itself is a single M1 profile.
             let m1 = Profile::load(&config_path.to_path_buf())?;
             let name = config_path.file_name().and_then(|s| s.to_str()).map(String::from);
             Ok(Self {
                 profiles_dir: base.to_path_buf(),
-                m1, m2: None, m3: None,
+                m1: Some(m1), m2: None, m3: None,
                 m1_name: name, m2_name: None, m3_name: None,
                 active: MKey::M1,
                 autorepeat,
@@ -352,24 +354,21 @@ impl ProfileSet {
         Ok(())
     }
 
-    pub fn active_profile(&self) -> &Profile {
+    pub fn active_profile(&self) -> Option<&Profile> {
         match self.active {
-            MKey::M2 => self.m2.as_ref().unwrap_or(&self.m1),
-            MKey::M3 => self.m3.as_ref().unwrap_or(&self.m1),
-            _ => &self.m1,
+            MKey::M2 => self.m2.as_ref(),
+            MKey::M3 => self.m3.as_ref(),
+            _ => self.m1.as_ref(),
         }
     }
 
-    /// Switch the active profile. No-op (returns false) for MR or an empty slot.
+    /// Switch the active profile. Succeeds (returns true) for M1/M2/M3 whether the
+    /// slot is populated or empty; a no-op (false) for MR.
     pub fn set_active(&mut self, k: MKey) -> bool {
-        let ok = match k {
-            MKey::M1 => true,
-            MKey::M2 => self.m2.is_some(),
-            MKey::M3 => self.m3.is_some(),
+        match k {
             MKey::MR => false,
-        };
-        if ok { self.active = k; }
-        ok
+            _ => { self.active = k; true }
+        }
     }
 
     pub fn name(&self, k: MKey) -> Option<&str> {
@@ -396,14 +395,12 @@ impl ProfileSet {
         self.profiles_dir.join(name)
     }
 
-    fn active_profile_mut(&mut self) -> &mut Profile {
-        // Invariant: `active` points at a populated slot (or M1).
-        if self.active == MKey::M2 {
-            if let Some(p) = self.m2.as_mut() { return p; }
-        } else if self.active == MKey::M3 {
-            if let Some(p) = self.m3.as_mut() { return p; }
+    fn active_profile_mut(&mut self) -> Option<&mut Profile> {
+        match self.active {
+            MKey::M2 => self.m2.as_mut(),
+            MKey::M3 => self.m3.as_mut(),
+            _ => self.m1.as_mut(),
         }
-        &mut self.m1
     }
 
     /// Replace the active profile's key bindings and repeat flags (joystick untouched) and write
@@ -413,8 +410,11 @@ impl ProfileSet {
         bindings: HashMap<G13Key, String>,
         repeat: HashMap<G13Key, bool>,
     ) -> Result<()> {
+        if self.active_name().is_none() || self.active_profile().is_none() {
+            anyhow::bail!("no profile in the active slot");
+        }
         let path = self.active_path();
-        let profile = self.active_profile_mut();
+        let profile = self.active_profile_mut().expect("checked above");
         profile.set_bindings(bindings);
         profile.set_repeat(repeat);
         let toml = profile.to_toml()?;
@@ -491,15 +491,16 @@ mod profileset_tests {
 
         let mut set = ProfileSet::load(&d.join("config.toml")).unwrap();
         assert_eq!(set.active(), MKey::M1);
-        assert_eq!(set.active_profile().get_binding(crate::protocol::G13Key::G1), Some("ctrl+c"));
+        assert_eq!(set.active_profile().unwrap().get_binding(crate::protocol::G13Key::G1), Some("ctrl+c"));
         assert_eq!(set.name(MKey::M2), Some("game.toml"));
 
         assert!(set.set_active(MKey::M2));
-        assert_eq!(set.active_profile().get_binding(crate::protocol::G13Key::G1), Some("space"));
+        assert_eq!(set.active_profile().unwrap().get_binding(crate::protocol::G13Key::G1), Some("space"));
 
-        // M3 unbound -> no-op switch, stays on M2.
-        assert!(!set.set_active(MKey::M3));
-        assert_eq!(set.active(), MKey::M2);
+        // M3 empty -> now selectable, active_profile None.
+        assert!(set.set_active(MKey::M3));
+        assert!(set.active_profile().is_none());
+        set.set_active(MKey::M2);
         // MR reserved -> no-op.
         assert!(!set.set_active(MKey::MR));
     }
@@ -509,15 +510,45 @@ mod profileset_tests {
         let d = tmp("legacy");
         write(&d, "config.toml", "[keys]\nG1 = \"ctrl+c\"\n");
         let set = ProfileSet::load(&d.join("config.toml")).unwrap();
-        assert_eq!(set.active_profile().get_binding(crate::protocol::G13Key::G1), Some("ctrl+c"));
+        assert_eq!(set.active_profile().unwrap().get_binding(crate::protocol::G13Key::G1), Some("ctrl+c"));
         assert!(set.name(MKey::M2).is_none());
     }
 
     #[test]
-    fn missing_m1_is_error() {
-        let d = tmp("missing-m1");
+    fn load_with_no_m1_is_ok_and_active_is_none() {
+        let d = tmp("no-m1");
+        write(&d, "config.toml", "profiles_dir = \"profiles\"\n"); // no m1/m2/m3
+        let set = ProfileSet::load(&d.join("config.toml")).unwrap();
+        assert!(set.active_profile().is_none());
+        assert_eq!(set.active(), MKey::M1);
+    }
+
+    #[test]
+    fn missing_m1_file_resolves_to_empty_not_error() {
+        let d = tmp("m1-missing-file");
         write(&d, "config.toml", "profiles_dir = \"profiles\"\nm1 = \"nope.toml\"\n");
-        assert!(ProfileSet::load(&d.join("config.toml")).is_err());
+        let set = ProfileSet::load(&d.join("config.toml")).unwrap(); // was an error before
+        assert!(set.active_profile().is_none());
+    }
+
+    #[test]
+    fn set_active_allows_empty_slots() {
+        let d = tmp("empty-active");
+        write(&d.join("profiles"), "basic.toml", "[keys]\nG1 = \"a\"\n");
+        write(&d, "config.toml", "profiles_dir = \"profiles\"\nm1 = \"basic.toml\"\n");
+        let mut set = ProfileSet::load(&d.join("config.toml")).unwrap();
+        assert!(set.set_active(MKey::M2)); // empty, but selectable now
+        assert_eq!(set.active(), MKey::M2);
+        assert!(set.active_profile().is_none()); // empty active -> None
+        assert!(!set.set_active(MKey::MR)); // MR still no-op
+    }
+
+    #[test]
+    fn legacy_bare_keys_still_single_m1_profile() {
+        let d = tmp("legacy-empty-rev");
+        write(&d, "config.toml", "[keys]\nG1 = \"ctrl+c\"\n");
+        let set = ProfileSet::load(&d.join("config.toml")).unwrap();
+        assert_eq!(set.active_profile().unwrap().get_binding(crate::protocol::G13Key::G1), Some("ctrl+c"));
     }
 
     #[test]
@@ -551,9 +582,9 @@ mod profileset_tests {
 
         // Fresh load from disk reflects the change; joystick preserved; game untouched.
         let reloaded = ProfileSet::load(&d.join("config.toml")).unwrap();
-        assert_eq!(reloaded.active_profile().get_binding(G13Key::G1), Some("ctrl+a"));
-        assert_eq!(reloaded.active_profile().get_binding(G13Key::G2), Some("f1"));
-        assert!(reloaded.active_profile().joystick().is_some(), "joystick preserved");
+        assert_eq!(reloaded.active_profile().unwrap().get_binding(G13Key::G1), Some("ctrl+a"));
+        assert_eq!(reloaded.active_profile().unwrap().get_binding(G13Key::G2), Some("f1"));
+        assert!(reloaded.active_profile().unwrap().joystick().is_some(), "joystick preserved");
         // M2 file untouched.
         let game = std::fs::read_to_string(d.join("profiles/game.toml")).unwrap();
         assert!(game.contains("space"));
@@ -650,7 +681,7 @@ mod profileset_tests {
         set.persist_profiles_dir(&d.join("elsewhere")).unwrap();
 
         let reloaded = ProfileSet::load(&d.join("config.toml")).unwrap();
-        assert_eq!(reloaded.active_profile().get_binding(crate::protocol::G13Key::G1), Some("b"));
+        assert_eq!(reloaded.active_profile().unwrap().get_binding(crate::protocol::G13Key::G1), Some("b"));
     }
 
     #[test]

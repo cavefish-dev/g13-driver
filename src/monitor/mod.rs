@@ -522,8 +522,7 @@ impl eframe::App for MonitorApp {
 
         egui::TopBottomPanel::bottom("ft").show(ctx, |ui| {
             let set = self.profiles.read().unwrap();
-            let cfg = set.active_profile();
-            let joy = cfg.joystick()
+            let joy = set.active_profile().and_then(|c| c.joystick())
                 .map(|j| format!("joystick: {:?}, deadzone {}", j.mode, j.deadzone))
                 .unwrap_or_else(|| "joystick: disabled".to_string());
             ui.label(format!("config.toml · {joy}"));
@@ -576,7 +575,7 @@ impl MonitorApp {
                         ui.add_space((BLOCK_W - row.len() as f32 * CELL) * 0.5);
                         for &key in row {
                             let pressed = snapshot.pressed.contains(&key);
-                            let binding = cfg.get_binding(key).unwrap_or("—");
+                            let binding = cfg.and_then(|c| c.get_binding(key)).unwrap_or("—");
                             let fill = if pressed { egui::Color32::from_rgb(20, 54, 31) } else { egui::Color32::from_gray(38) };
                             egui::Frame::new().fill(fill).inner_margin(4.0).outer_margin(3.0).corner_radius(4.0).show(ui, |ui| {
                                 ui.set_width(48.0);
@@ -598,7 +597,7 @@ impl MonitorApp {
                     ui.add_space((BLOCK_W - 140.0) * 0.5);
                     ui.vertical(|ui| {
                         ui.label("JOYSTICK");
-                        let (dz, up, down, left, right) = cfg.joystick()
+                        let (dz, up, down, left, right) = cfg.and_then(|c| c.joystick())
                             .map(|j| (
                                 j.deadzone,
                                 j.up.clone().unwrap_or_default(),
@@ -901,18 +900,31 @@ impl MonitorApp {
     }
 
     fn render_bindings(&mut self, ui: &mut egui::Ui) {
+        // An empty active slot has no bindings to edit — show a notice and bail.
+        {
+            let set = self.profiles.read().unwrap();
+            if set.active_profile().is_none() {
+                drop(set);
+                ui.heading("Bindings");
+                ui.label("No profile in the active slot — assign one on the Profiles tab.");
+                return;
+            }
+        }
+
         // Which profile are we editing? Reload buffers when it changes.
         let active_name = self.profiles.read().unwrap().active_name().map(String::from);
         if self.edits_for != active_name {
             let set = self.profiles.read().unwrap();
-            let profile = set.active_profile();
-            let bound = profile.bindings();
-            self.edits = ROWS.iter().flat_map(|row| row.iter()).chain(THUMB.iter())
-                .map(|&k| (k, bound.get(&k).cloned().unwrap_or_default()))
-                .collect();
-            self.repeat_edits = ROWS.iter().flat_map(|row| row.iter()).chain(THUMB.iter())
-                .map(|&k| (k, profile.repeats(k)))
-                .collect();
+            // Populated (checked above), so active_profile() is Some.
+            if let Some(profile) = set.active_profile() {
+                let bound = profile.bindings();
+                self.edits = ROWS.iter().flat_map(|row| row.iter()).chain(THUMB.iter())
+                    .map(|&k| (k, bound.get(&k).cloned().unwrap_or_default()))
+                    .collect();
+                self.repeat_edits = ROWS.iter().flat_map(|row| row.iter()).chain(THUMB.iter())
+                    .map(|&k| (k, profile.repeats(k)))
+                    .collect();
+            }
             drop(set);
             self.edits_for = active_name.clone();
             self.save_status = None;

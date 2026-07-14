@@ -37,7 +37,7 @@ pub fn run_headless(config: Arc<RwLock<ProfileSet>>) -> Result<()> {
     let injector = Box::new(injector::windows::WindowsInjector::new());
     let mut dispatcher = dispatcher::Dispatcher::new(config.clone(), injector);
 
-    if let Some(j) = config.read().unwrap().active_profile().joystick() {
+    if let Some(j) = config.read().unwrap().active_profile().and_then(|p| p.joystick()) {
         if j.mode == JoystickMode::Mouse {
             log::warn!("joystick mouse mode is configured but not yet implemented; stick will be inert");
         }
@@ -103,7 +103,7 @@ mod tests {
         std::fs::write(d.join("profiles/default.toml"), "[keys]\nG1 = \"z\"\n").unwrap();
         reload_now(&cfg, &d.join("config.toml")).unwrap();
         assert_eq!(
-            cfg.read().unwrap().active_profile().get_binding(crate::protocol::G13Key::G1),
+            cfg.read().unwrap().active_profile().unwrap().get_binding(crate::protocol::G13Key::G1),
             Some("z"));
     }
 }

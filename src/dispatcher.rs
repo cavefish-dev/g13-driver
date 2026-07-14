@@ -50,8 +50,10 @@ impl Dispatcher {
     fn handle_key_down(&mut self, key: G13Key) {
         let (binding, repeat, ar) = {
             let set = self.profiles.read().unwrap();
-            let p = set.active_profile();
-            (p.get_binding(key).map(str::to_owned), p.repeats(key), set.autorepeat())
+            match set.active_profile() {
+                Some(p) => (p.get_binding(key).map(str::to_owned), p.repeats(key), set.autorepeat()),
+                None => (None, false, set.autorepeat()),
+            }
         };
         let Some(binding) = binding else {
             log::debug!("{key:?} -> (unmapped)");
@@ -125,7 +127,7 @@ impl Dispatcher {
         // dropped before we touch the injector.
         let cfg = {
             let set = self.profiles.read().unwrap();
-            set.active_profile().joystick()
+            set.active_profile().and_then(|p| p.joystick())
                 .filter(|j| j.mode == JoystickMode::Wasd)
                 .cloned()
         };
@@ -143,9 +145,7 @@ impl Dispatcher {
         self.release_joystick();
         let mut set = self.profiles.write().unwrap();
         if set.set_active(m) {
-            log::info!("profile -> {}", set.name(m).unwrap_or("?"));
-        } else {
-            log::warn!("no profile bound to {m:?}");
+            log::info!("profile -> {}", set.name(m).unwrap_or("(none)"));
         }
     }
 
