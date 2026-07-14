@@ -461,6 +461,9 @@ impl ProfileSet {
         let profile = self.active_profile_mut().expect("checked above");
         profile.set_bindings(bindings);
         profile.set_repeat(repeat);
+        if profile.source() == ProfileSource::Github {
+            profile.set_modified(true);
+        }
         let toml = profile.to_toml()?;
         std::fs::write(&path, toml)
             .with_context(|| format!("failed to write {}", path.display()))?;
@@ -726,6 +729,35 @@ mod profileset_tests {
 
         let reloaded = ProfileSet::load(&d.join("config.toml")).unwrap();
         assert_eq!(reloaded.active_profile().unwrap().get_binding(crate::protocol::G13Key::G1), Some("b"));
+    }
+
+    #[test]
+    fn saving_github_profile_marks_modified() {
+        let d = tmp("flip-github");
+        write(&d.join("profiles"), "g.toml",
+            "[meta]\nname = \"G\"\nsource = \"github\"\n[keys]\nG1 = \"a\"\n");
+        write(&d, "config.toml", "profiles_dir = \"profiles\"\nm1 = \"g.toml\"\n");
+        let mut set = ProfileSet::load(&d.join("config.toml")).unwrap();
+        let mut b = HashMap::new();
+        b.insert(G13Key::G1, "ctrl+c".to_string());
+        set.save_active_bindings(b, HashMap::new()).unwrap();
+        let text = std::fs::read_to_string(d.join("profiles/g.toml")).unwrap();
+        assert!(text.contains("modified = true"), "github profile flips modified on save");
+        assert!(text.contains("source = \"github\""), "source preserved");
+    }
+
+    #[test]
+    fn saving_user_profile_stays_clean() {
+        let d = tmp("flip-user");
+        write(&d.join("profiles"), "u.toml", "[keys]\nG1 = \"a\"\n");
+        write(&d, "config.toml", "profiles_dir = \"profiles\"\nm1 = \"u.toml\"\n");
+        let mut set = ProfileSet::load(&d.join("config.toml")).unwrap();
+        let mut b = HashMap::new();
+        b.insert(G13Key::G1, "ctrl+c".to_string());
+        set.save_active_bindings(b, HashMap::new()).unwrap();
+        let text = std::fs::read_to_string(d.join("profiles/u.toml")).unwrap();
+        assert!(!text.contains("modified"), "user profile stays clean");
+        assert!(!text.contains("source"), "user profile stays clean");
     }
 
     #[test]
