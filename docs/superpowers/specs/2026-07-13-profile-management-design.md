@@ -1,7 +1,38 @@
 # Profile management — design
 
-- **Status:** approved (design)
+- **Status:** approved (design); **revised 2026-07-14 — see "Revision: empty slots"**
 - **Date:** 2026-07-13
+
+## Revision (2026-07-14): empty slots are a valid state
+
+The GUI smoke test revealed a catch-22: assignment targets the *active* slot, but empty slots
+refused activation — so an unassigned slot (e.g. M3) could never be filled. This revision makes an
+empty slot (and an entirely empty slot set) a first-class valid state, and **supersedes the
+"load invariant" and delete-guardrail decisions below**.
+
+- **All three slots are symmetric optional.** `ProfileSet`'s `m1` becomes `Option<Profile>` like
+  `m2`/`m3`. `active_profile()` returns `Option<&Profile>`.
+- **Any of M1/M2/M3 is always selectable**, empty or not (`set_active` returns `true` for
+  M1/M2/M3, MR stays a no-op). Clicking an empty slot activates it, so a profile can then be
+  assigned to it.
+- **Empty active slot → the driver does nothing.** The dispatcher injects nothing for G-keys,
+  joystick, and repeat when `active_profile()` is `None`. Physical M-keys still switch slots.
+- **The library and every slot may be empty.** `ProfileSet::load` no longer requires `m1` to
+  resolve — a manifest with no/empty slots loads fine. A slot that names a missing/unparseable
+  file resolves to `None` with a logged warning (no error, no crash). The bare-`[keys]` legacy
+  config still loads as a single M1 profile.
+- **Unassign** — the Profiles tab gains an "Unassign" button that clears the active slot
+  (`persist_slot(active, None)` → reload).
+- **Delete is unconditional** (confirmation prompt stays): deleting a profile auto-unassigns
+  **every** slot (M1/M2/M3) that referenced it, then removes the file. `deletion_plan` collapses
+  to "return all referencing slots to unassign" and never refuses. The old "can't delete the
+  M1-bound / last profile" refusals are removed.
+- **Bindings tab:** when the active slot is empty, it shows "No profile in the active slot — assign
+  one on the Profiles tab" and does not edit/save.
+
+Where the sections below say "m1 must always resolve" or describe delete refusals, this revision
+governs.
+
 - **Scope:** Turn the half-built Profiles tab into a full profile manager: a profiles *library*
   (the folder of `.toml` files) that the user browses and selects from, with a relocatable +
   openable folder, and create / duplicate / rename / delete operations. The three physical M-keys
