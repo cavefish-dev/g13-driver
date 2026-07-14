@@ -1,13 +1,14 @@
 use std::path::Path;
-use crate::config::RawConfig;
+use crate::config::{ProfileSource, Profile, RawConfig};
 use anyhow::{Context, Result};
-use crate::config::Profile;
 
 /// One profile file in the library.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProfileEntry {
     pub filename: String,
     pub display_name: String,
+    pub source: ProfileSource,
+    pub modified: bool,
 }
 
 /// Turn a display name into a filesystem-safe stem (no extension).
@@ -46,14 +47,18 @@ pub fn unique_filename(dir: &Path, display_name: &str) -> String {
     candidate
 }
 
-/// Lenient read of `[meta].name` from a profile file; None on any error or empty.
-fn read_display_name(path: &Path) -> Option<String> {
-    let text = std::fs::read_to_string(path).ok()?;
-    let raw: RawConfig = toml::from_str(&text).ok()?;
-    raw.meta
-        .and_then(|m| m.name)
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
+/// Lenient read of `[meta]` (name, source, modified) from a profile file.
+fn read_entry_meta(path: &Path) -> (Option<String>, ProfileSource, bool) {
+    let Ok(text) = std::fs::read_to_string(path) else { return (None, ProfileSource::User, false) };
+    let Ok(raw) = toml::from_str::<RawConfig>(&text) else { return (None, ProfileSource::User, false) };
+    match raw.meta {
+        Some(m) => (
+            m.name.map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
+            m.source.as_deref().map(ProfileSource::parse).unwrap_or_default(),
+            m.modified.unwrap_or(false),
+        ),
+        None => (None, ProfileSource::User, false),
+    }
 }
 
 /// All `.toml` files in `dir` as entries, sorted by display name (case-insensitive).
@@ -65,8 +70,9 @@ pub fn list(dir: &Path) -> Vec<ProfileEntry> {
             let Some(fname) = path.file_name().and_then(|s| s.to_str()) else { continue };
             if !fname.ends_with(".toml") { continue; }
             let stem = fname.trim_end_matches(".toml").to_string();
-            let display_name = read_display_name(&path).unwrap_or(stem);
-            entries.push(ProfileEntry { filename: fname.to_string(), display_name });
+            let (name, source, modified) = read_entry_meta(&path);
+            let display_name = name.unwrap_or(stem);
+            entries.push(ProfileEntry { filename: fname.to_string(), display_name, source, modified });
         }
     }
     entries.sort_by(|a, b| a.display_name.to_lowercase().cmp(&b.display_name.to_lowercase()));
@@ -88,6 +94,8 @@ pub fn duplicate(dir: &Path, src_filename: &str, new_display_name: &str) -> Resu
     let mut profile = Profile::load(&dir.join(src_filename))
         .with_context(|| format!("failed to load {src_filename}"))?;
     profile.set_meta_name(Some(new_display_name.to_string()));
+    profile.set_source(ProfileSource::User);
+    profile.set_modified(false);
     let filename = unique_filename(dir, new_display_name);
     std::fs::write(dir.join(&filename), profile.to_toml()?)
         .with_context(|| format!("failed to write {filename}"))?;
@@ -281,6 +289,52 @@ mod tests {
         std::fs::write(d.join("gone.toml"), "[keys]\n").unwrap();
         delete(&d, "gone.toml").unwrap();
         assert!(!d.join("gone.toml").exists());
+    }
+
+    #[test]
+    fn create_is_user_source() {
+        let d = tmp("prov-create");
+        let f = create(&d, "Mine").unwrap();
+        let p = crate::config::Profile::load(&d.join(&f)).unwrap();
+        assert_eq!(p.source(), crate::config::ProfileSource::User);
+        assert!(!p.modified());
+    }
+
+    #[test]
+    fn duplicate_resets_provenance_to_user() {
+        let d = tmp("prov-dup");
+        std::fs::write(d.join("src.toml"),
+            "[meta]\nname = \"Src\"\nsource = \"github\"\nmodified = true\n[keys]\nG1 = \"a\"\n").unwrap();
+        let f = duplicate(&d, "src.toml", "Copy").unwrap();
+        let p = crate::config::Profile::load(&d.join(&f)).unwrap();
+        assert_eq!(p.source(), crate::config::ProfileSource::User);
+        assert!(!p.modified());
+        assert_eq!(p.get_binding(crate::protocol::G13Key::G1), Some("a")); // bindings copied
+    }
+
+    #[test]
+    fn rename_preserves_source_and_modified() {
+        let d = tmp("prov-rename");
+        std::fs::write(d.join("g.toml"),
+            "[meta]\nname = \"G\"\nsource = \"github\"\nmodified = true\n[keys]\nG1 = \"a\"\n").unwrap();
+        rename(&d, "g.toml", "Renamed").unwrap();
+        let p = crate::config::Profile::load(&d.join("g.toml")).unwrap();
+        assert_eq!(p.source(), crate::config::ProfileSource::Github);
+        assert!(p.modified());
+    }
+
+    #[test]
+    fn list_surfaces_source_and_modified() {
+        let d = tmp("prov-list");
+        std::fs::write(d.join("a.toml"),
+            "[meta]\nname = \"A\"\nsource = \"github\"\n[keys]\n").unwrap();
+        std::fs::write(d.join("b.toml"), "[keys]\nG1 = \"a\"\n").unwrap(); // user
+        let entries = list(&d);
+        let a = entries.iter().find(|e| e.filename == "a.toml").unwrap();
+        let b = entries.iter().find(|e| e.filename == "b.toml").unwrap();
+        assert_eq!(a.source, crate::config::ProfileSource::Github);
+        assert!(!a.modified);
+        assert_eq!(b.source, crate::config::ProfileSource::User);
     }
 
     #[test]
