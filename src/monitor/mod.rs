@@ -715,10 +715,10 @@ impl MonitorApp {
             if ui.button("Open folder").clicked() {
                 do_open_folder = true;
             }
-            if ui.button("New").clicked() {
+            if ui.button("New profile").clicked() {
                 self.name_prompt = Some(NamePrompt { kind: PromptKind::New, buffer: String::new() });
             }
-            if ui.button("Unassign").clicked() {
+            if ui.button("Unassign profile").clicked() {
                 do_unassign = true;
             }
         });
