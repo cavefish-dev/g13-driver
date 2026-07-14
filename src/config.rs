@@ -8,6 +8,10 @@ use crate::protocol::{G13Key, MKey};
 pub(crate) struct RawMeta {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub modified: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -68,6 +72,23 @@ impl AutoRepeat {
     }
 }
 
+/// Where a profile came from. Absent/unknown in the file => `User`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ProfileSource {
+    #[default]
+    User,
+    Github,
+}
+
+impl ProfileSource {
+    pub(crate) fn parse(s: &str) -> Self {
+        if s.trim().eq_ignore_ascii_case("github") { Self::Github } else { Self::User }
+    }
+    fn as_str(self) -> Option<&'static str> {
+        match self { Self::Github => Some("github"), Self::User => None }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum JoystickMode {
     Wasd,
@@ -90,6 +111,8 @@ pub struct Profile {
     joystick: Option<JoystickConfig>,
     repeat: HashMap<G13Key, bool>,
     meta_name: Option<String>,
+    source: ProfileSource,
+    modified: bool,
 }
 
 impl Profile {
@@ -121,12 +144,16 @@ impl Profile {
             None => None,
         };
 
-        let meta_name = raw.meta
-            .and_then(|m| m.name)
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty());
+        let (meta_name, source, modified) = match raw.meta {
+            Some(m) => (
+                m.name.map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
+                m.source.as_deref().map(ProfileSource::parse).unwrap_or_default(),
+                m.modified.unwrap_or(false),
+            ),
+            None => (None, ProfileSource::User, false),
+        };
 
-        Ok(Self { key_bindings, joystick, repeat, meta_name })
+        Ok(Self { key_bindings, joystick, repeat, meta_name, source, modified })
     }
 
     pub fn get_binding(&self, key: G13Key) -> Option<&str> {
@@ -154,6 +181,11 @@ impl Profile {
     pub fn set_meta_name(&mut self, name: Option<String>) {
         self.meta_name = name.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
     }
+
+    pub fn source(&self) -> ProfileSource { self.source }
+    pub fn set_source(&mut self, source: ProfileSource) { self.source = source; }
+    pub fn modified(&self) -> bool { self.modified }
+    pub fn set_modified(&mut self, modified: bool) { self.modified = modified; }
 
     pub fn repeats(&self, key: G13Key) -> bool {
         *self.repeat.get(&key).unwrap_or(&false)
@@ -184,7 +216,16 @@ impl Profile {
             .filter(|(_, &v)| v)
             .map(|(k, _)| (format!("{k:?}"), true)) // Debug of G13Key: "G1".."Stick"
             .collect();
-        let meta = self.meta_name.clone().map(|name| RawMeta { name: Some(name) });
+        let meta = {
+            let name = self.meta_name.clone();
+            let source = self.source.as_str().map(str::to_string);
+            let modified = if self.modified { Some(true) } else { None };
+            if name.is_some() || source.is_some() || modified.is_some() {
+                Some(RawMeta { name, source, modified })
+            } else {
+                None
+            }
+        };
         let raw = RawConfig { meta, keys, joystick, repeat };
         toml::to_string(&raw).context("failed to serialize profile")
     }
@@ -197,6 +238,8 @@ impl Default for Profile {
             joystick: None,
             repeat: HashMap::new(),
             meta_name: None,
+            source: ProfileSource::User,
+            modified: false,
         }
     }
 }
@@ -907,5 +950,57 @@ G3 = "f5"
         assert!(toml.contains("[meta]"));
         let reloaded = Profile::from_raw(toml::from_str(&toml).unwrap()).unwrap();
         assert_eq!(reloaded.meta_name(), Some("Basic"));
+    }
+
+    #[test]
+    fn parses_source_and_modified() {
+        let src = "[meta]\nname = \"X\"\nsource = \"github\"\nmodified = true\n[keys]\nG1 = \"a\"\n";
+        let p = Profile::from_raw(toml::from_str(src).unwrap()).unwrap();
+        assert_eq!(p.source(), ProfileSource::Github);
+        assert!(p.modified());
+    }
+
+    #[test]
+    fn source_absent_is_user_and_modified_absent_is_false() {
+        let p = Profile::from_raw(raw(&[("G1", "a")])).unwrap();
+        assert_eq!(p.source(), ProfileSource::User);
+        assert!(!p.modified());
+    }
+
+    #[test]
+    fn garbage_source_is_user() {
+        let src = "[meta]\nsource = \"nonsense\"\n[keys]\nG1 = \"a\"\n";
+        let p = Profile::from_raw(toml::from_str(src).unwrap()).unwrap();
+        assert_eq!(p.source(), ProfileSource::User);
+    }
+
+    #[test]
+    fn to_toml_omits_source_and_modified_for_user_default() {
+        let p = Profile::from_raw(raw(&[("G1", "a")])).unwrap();
+        let toml = p.to_toml().unwrap();
+        assert!(!toml.contains("source"));
+        assert!(!toml.contains("modified"));
+    }
+
+    #[test]
+    fn to_toml_round_trips_github_modified() {
+        let mut p = Profile::from_raw(raw(&[("G1", "a")])).unwrap();
+        p.set_source(ProfileSource::Github);
+        p.set_modified(true);
+        let toml = p.to_toml().unwrap();
+        assert!(toml.contains("source = \"github\""));
+        assert!(toml.contains("modified = true"));
+        let reloaded = Profile::from_raw(toml::from_str(&toml).unwrap()).unwrap();
+        assert_eq!(reloaded.source(), ProfileSource::Github);
+        assert!(reloaded.modified());
+    }
+
+    #[test]
+    fn github_unmodified_omits_modified_line() {
+        let mut p = Profile::from_raw(raw(&[("G1", "a")])).unwrap();
+        p.set_source(ProfileSource::Github);
+        let toml = p.to_toml().unwrap();
+        assert!(toml.contains("source = \"github\""));
+        assert!(!toml.contains("modified"));
     }
 }
