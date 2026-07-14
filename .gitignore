@@ -2,3 +2,6 @@
 
 # Superpowers scratch: brainstorm mockups, SDD progress ledger, briefs, review packages
 /.superpowers/
+
+# Personal, machine-local agent instructions (never checked in)
+/CLAUDE.local.md
