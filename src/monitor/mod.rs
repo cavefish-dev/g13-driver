@@ -194,6 +194,7 @@ pub struct MonitorApp {
     profiles_status: Option<String>,
     catalog_state: std::sync::Arc<std::sync::Mutex<crate::catalog::CatalogState>>,
     catalog_status: std::sync::Arc<std::sync::Mutex<Option<String>>>,
+    pending_revert: Option<(std::path::PathBuf, String)>,
 }
 
 impl MonitorApp {
@@ -232,6 +233,7 @@ impl MonitorApp {
             profiles_status: None,
             catalog_state: std::sync::Arc::new(std::sync::Mutex::new(crate::catalog::CatalogState::Idle)),
             catalog_status: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            pending_revert: None,
         };
 
         // Windows: build the tray from the current state and start the
@@ -973,11 +975,16 @@ impl MonitorApp {
 
         // Read provenance flags while holding the lock briefly, then drop the lock
         // before any further rendering or mutation.
-        let (is_github, is_modified) = {
+        let (is_github, is_modified, origin, active_path) = {
             let set = self.profiles.read().unwrap();
             match set.active_profile() {
-                Some(profile) => (profile.source() == ProfileSource::Github, profile.modified()),
-                None => (false, false),
+                Some(profile) => (
+                    profile.source() == ProfileSource::Github,
+                    profile.modified(),
+                    profile.origin().map(String::from),
+                    Some(set.active_path()),
+                ),
+                None => (false, false, None, None),
             }
         };
 
@@ -992,6 +999,16 @@ impl MonitorApp {
             } else {
                 ui.weak("From GitHub — your edits will mark this profile as edited.");
             }
+        }
+        if is_github && is_modified {
+            if let (Some(origin), Some(path)) = (origin.clone(), active_path.clone()) {
+                if ui.button("Revert to GitHub version").clicked() {
+                    self.pending_revert = Some((path, origin));
+                }
+            }
+        }
+        if let Some(s) = self.catalog_status.lock().unwrap().clone() {
+            ui.weak(s);
         }
         ui.weak("Combo = optional modifiers (ctrl / shift / alt / win) + one key, held while \
                  the G-key is held. Examples: ctrl+c, ctrl+shift+z, win+d. Modifiers alone are \
@@ -1048,6 +1065,40 @@ impl MonitorApp {
         });
         if !all_valid {
             ui.colored_label(red, "Fix the invalid (bad) combos before saving.");
+        }
+
+        if let Some((path, origin)) = self.pending_revert.clone() {
+            let mut go = false;
+            let mut cancel = false;
+            egui::Modal::new(egui::Id::new("revert_confirm")).show(ui.ctx(), |ui| {
+                ui.set_width(320.0);
+                ui.heading("Revert to GitHub version");
+                ui.label("Discard your changes and restore the downloaded version?");
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Revert").clicked() { go = true; }
+                    if ui.button("Cancel").clicked() { cancel = true; }
+                });
+            });
+            if go {
+                let profiles = self.profiles.clone();
+                let config_path = self.config_path.clone();
+                let status = self.catalog_status.clone();
+                let ctx = ui.ctx().clone();
+                *status.lock().unwrap() = Some("Reverting…".to_string());
+                std::thread::spawn(move || {
+                    let msg = match crate::catalog::revert(&path, &origin)
+                        .and_then(|_| crate::runtime::reload_now(&profiles, &config_path)) {
+                        Ok(()) => "Reverted to the GitHub version.".to_string(),
+                        Err(e) => { log::warn!("revert failed: {e:#}"); format!("Revert failed: {e}") }
+                    };
+                    *status.lock().unwrap() = Some(msg);
+                    ctx.request_repaint();
+                });
+                self.pending_revert = None;
+            } else if cancel {
+                self.pending_revert = None;
+            }
         }
     }
 
