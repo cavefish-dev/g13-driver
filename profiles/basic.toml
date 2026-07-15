@@ -34,8 +34,6 @@ G11 = "Find"
 G12 = "Close"
 
 [joystick]
-mode = "wasd"      # "wasd" (implemented) | "mouse" (parsed, not yet implemented)
-deadzone = 30      # 0-127; distance from center (127) before a key fires
 up = "w"
 down = "s"
 left = "a"

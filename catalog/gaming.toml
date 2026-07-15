@@ -22,8 +22,6 @@ G6 = "Use"
 G7 = "Jump"
 
 [joystick]
-mode = "wasd"
-deadzone = 30
 up = "w"
 down = "s"
 left = "a"
