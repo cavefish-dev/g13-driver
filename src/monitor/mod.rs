@@ -988,6 +988,55 @@ impl MonitorApp {
             }
         };
 
+        let red = egui::Color32::from_rgb(220, 90, 90);
+        let valid_keys: HashSet<String> = build_key_map().into_keys().collect();
+        let all_valid = self.edits.values().all(|b| b.is_empty() || combo_valid(b, &valid_keys));
+
+        // Pinned action bar — always visible regardless of window height.
+        egui::TopBottomPanel::bottom("bindings_actions").show_inside(ui, |ui| {
+            ui.add_space(4.0);
+            if !all_valid {
+                ui.colored_label(red, "Fix the invalid (bad) combos before saving.");
+            }
+            if is_github && is_modified {
+                if let (Some(origin), Some(path)) = (origin.clone(), active_path.clone()) {
+                    if ui.button("Revert to GitHub version").clicked() {
+                        self.pending_revert = Some((path, origin));
+                    }
+                }
+            }
+            ui.horizontal(|ui| {
+                if ui.add_enabled(all_valid, egui::Button::new("Save")).clicked() {
+                    let bindings: HashMap<G13Key, String> = self.edits.iter()
+                        .filter(|(_, v)| !v.is_empty())
+                        .map(|(k, v)| (*k, v.clone()))
+                        .collect();
+                    let repeat: HashMap<G13Key, bool> = self.repeat_edits.iter()
+                        .filter(|(_, &v)| v)
+                        .map(|(k, &v)| (*k, v))
+                        .collect();
+                    match self.profiles.write().unwrap().save_active_bindings(bindings, repeat) {
+                        Ok(()) => self.save_status = Some("saved".to_string()),
+                        Err(e) => {
+                            log::warn!("save failed: {e:#}");
+                            self.save_status = Some(format!("save failed: {e:#}"));
+                        }
+                    }
+                }
+                if ui.button("Revert edits").clicked() {
+                    self.edits_for = None; // forces a reload from the profile next frame
+                }
+                if let Some(s) = &self.save_status {
+                    ui.label(s);
+                }
+            });
+            if let Some(s) = self.catalog_status.lock().unwrap().clone() {
+                ui.weak(s);
+            }
+            ui.add_space(4.0);
+        });
+
+        // Central content (fills the space above the pinned action bar).
         ui.heading("Bindings");
         match &active_name {
             Some(n) => ui.label(format!("Editing profile: {n}")),
@@ -1000,16 +1049,6 @@ impl MonitorApp {
                 ui.weak("From GitHub — your edits will mark this profile as edited.");
             }
         }
-        if is_github && is_modified {
-            if let (Some(origin), Some(path)) = (origin.clone(), active_path.clone()) {
-                if ui.button("Revert to GitHub version").clicked() {
-                    self.pending_revert = Some((path, origin));
-                }
-            }
-        }
-        if let Some(s) = self.catalog_status.lock().unwrap().clone() {
-            ui.weak(s);
-        }
         ui.weak("Combo = optional modifiers (ctrl / shift / alt / win) + one key, held while \
                  the G-key is held. Examples: ctrl+c, ctrl+shift+z, win+d. Modifiers alone are \
                  allowed (e.g. shift, ctrl+shift). Keys: a-z, 0-9, f1-f24, enter, esc, space, \
@@ -1019,12 +1058,7 @@ impl MonitorApp {
                  timing (delay/rate) is set in config.toml under [autorepeat].");
         ui.add_space(6.0);
 
-        let red = egui::Color32::from_rgb(220, 90, 90);
-
-        // Valid key names (built once per frame from the injector's key table).
-        let valid_keys: HashSet<String> = build_key_map().into_keys().collect();
-
-        egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
+        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             for &key in ROWS.iter().flat_map(|row| row.iter()) {
                 render_binding_row(ui, key, &mut self.edits, &mut self.repeat_edits, &valid_keys);
             }
@@ -1035,37 +1069,6 @@ impl MonitorApp {
                 render_binding_row(ui, key, &mut self.edits, &mut self.repeat_edits, &valid_keys);
             }
         });
-
-        ui.add_space(8.0);
-        let all_valid = self.edits.values().all(|b| b.is_empty() || combo_valid(b, &valid_keys));
-        ui.horizontal(|ui| {
-            if ui.add_enabled(all_valid, egui::Button::new("Save")).clicked() {
-                let bindings: HashMap<G13Key, String> = self.edits.iter()
-                    .filter(|(_, v)| !v.is_empty())
-                    .map(|(k, v)| (*k, v.clone()))
-                    .collect();
-                let repeat: HashMap<G13Key, bool> = self.repeat_edits.iter()
-                    .filter(|(_, &v)| v)
-                    .map(|(k, &v)| (*k, v))
-                    .collect();
-                match self.profiles.write().unwrap().save_active_bindings(bindings, repeat) {
-                    Ok(()) => self.save_status = Some("saved".to_string()),
-                    Err(e) => {
-                        log::warn!("save failed: {e:#}");
-                        self.save_status = Some(format!("save failed: {e:#}"));
-                    }
-                }
-            }
-            if ui.button("Revert").clicked() {
-                self.edits_for = None; // forces a reload from the profile next frame
-            }
-            if let Some(s) = &self.save_status {
-                ui.label(s);
-            }
-        });
-        if !all_valid {
-            ui.colored_label(red, "Fix the invalid (bad) combos before saving.");
-        }
 
         if let Some((path, origin)) = self.pending_revert.clone() {
             let mut go = false;
