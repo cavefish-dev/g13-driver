@@ -26,6 +26,8 @@ pub(crate) struct RawConfig {
     pub joystick: Option<RawJoystick>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub repeat: HashMap<String, bool>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub labels: HashMap<String, String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -112,6 +114,7 @@ pub struct Profile {
     key_bindings: HashMap<G13Key, String>,
     joystick: Option<JoystickConfig>,
     repeat: HashMap<G13Key, bool>,
+    labels: HashMap<G13Key, String>,
     meta_name: Option<String>,
     source: ProfileSource,
     modified: bool,
@@ -142,6 +145,14 @@ impl Profile {
             repeat.insert(key, on);
         }
 
+        let mut labels = HashMap::new();
+        for (name, text) in raw.labels {
+            let key = parse_g13_key(&name)
+                .with_context(|| format!("unknown G13 key in [labels]: {}", name))?;
+            let text = text.trim().to_string();
+            if !text.is_empty() { labels.insert(key, text); }
+        }
+
         let joystick = match raw.joystick {
             Some(rj) => Some(parse_joystick(rj)?),
             None => None,
@@ -157,7 +168,7 @@ impl Profile {
             None => (None, ProfileSource::User, false, None),
         };
 
-        Ok(Self { key_bindings, joystick, repeat, meta_name, source, modified, origin })
+        Ok(Self { key_bindings, joystick, repeat, labels, meta_name, source, modified, origin })
     }
 
     pub fn get_binding(&self, key: G13Key) -> Option<&str> {
@@ -203,6 +214,17 @@ impl Profile {
         self.repeat = repeat;
     }
 
+    pub fn label(&self, key: G13Key) -> Option<&str> {
+        self.labels.get(&key).map(|s| s.as_str())
+    }
+
+    pub fn set_labels(&mut self, labels: HashMap<G13Key, String>) {
+        self.labels = labels.into_iter()
+            .map(|(k, v)| (k, v.trim().to_string()))
+            .filter(|(_, v)| !v.is_empty())
+            .collect();
+    }
+
     /// Serialize this profile back to TOML (keys + joystick + repeat). Comments in the
     /// original file are not preserved (the file becomes GUI-managed).
     pub fn to_toml(&self) -> Result<String> {
@@ -224,6 +246,10 @@ impl Profile {
             .filter(|(_, &v)| v)
             .map(|(k, _)| (format!("{k:?}"), true)) // Debug of G13Key: "G1".."Stick"
             .collect();
+        let labels: HashMap<String, String> = self.labels.iter()
+            .filter(|(_, v)| !v.trim().is_empty())
+            .map(|(k, v)| (format!("{k:?}"), v.clone()))
+            .collect();
         let meta = {
             let name = self.meta_name.clone();
             let source = self.source.as_str().map(str::to_string);
@@ -235,7 +261,7 @@ impl Profile {
                 None
             }
         };
-        let raw = RawConfig { meta, keys, joystick, repeat };
+        let raw = RawConfig { meta, keys, joystick, repeat, labels };
         toml::to_string(&raw).context("failed to serialize profile")
     }
 }
@@ -246,6 +272,7 @@ impl Default for Profile {
             key_bindings: HashMap::new(),
             joystick: None,
             repeat: HashMap::new(),
+            labels: HashMap::new(),
             meta_name: None,
             source: ProfileSource::User,
             modified: false,
@@ -800,6 +827,7 @@ mod tests {
             keys: pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
             joystick: None,
             repeat: HashMap::new(),
+            labels: HashMap::new(),
         }
     }
 
@@ -1075,5 +1103,53 @@ G3 = "f5"
         let p = Profile::from_raw(raw(&[("G1", "a")])).unwrap();
         let toml = p.to_toml().unwrap();
         assert!(!toml.contains("origin"));
+    }
+
+    #[test]
+    fn parses_labels() {
+        let src = "[keys]\nG1 = \"ctrl+c\"\n[labels]\nG1 = \"Copy\"\n";
+        let p = Profile::from_raw(toml::from_str(src).unwrap()).unwrap();
+        assert_eq!(p.label(G13Key::G1), Some("Copy"));
+        assert_eq!(p.label(G13Key::G2), None);
+    }
+
+    #[test]
+    fn empty_label_is_omitted() {
+        let src = "[keys]\nG1 = \"a\"\n[labels]\nG1 = \"  \"\n";
+        let p = Profile::from_raw(toml::from_str(src).unwrap()).unwrap();
+        assert_eq!(p.label(G13Key::G1), None);
+    }
+
+    #[test]
+    fn unknown_key_in_labels_errors() {
+        let src = "[labels]\nG99 = \"Nope\"\n";
+        assert!(Profile::from_raw(toml::from_str(src).unwrap()).is_err());
+    }
+
+    #[test]
+    fn label_without_binding_still_loads() {
+        let src = "[labels]\nG1 = \"Copy\"\n"; // no [keys]
+        let p = Profile::from_raw(toml::from_str(src).unwrap()).unwrap();
+        assert_eq!(p.label(G13Key::G1), Some("Copy"));
+        assert_eq!(p.get_binding(G13Key::G1), None);
+    }
+
+    #[test]
+    fn to_toml_round_trips_labels() {
+        use std::collections::HashMap;
+        let mut p = Profile::from_raw(raw(&[("G1", "ctrl+c")])).unwrap();
+        let mut labels = HashMap::new();
+        labels.insert(G13Key::G1, "Copy".to_string());
+        p.set_labels(labels);
+        let toml = p.to_toml().unwrap();
+        assert!(toml.contains("[labels]"));
+        let reloaded = Profile::from_raw(toml::from_str(&toml).unwrap()).unwrap();
+        assert_eq!(reloaded.label(G13Key::G1), Some("Copy"));
+    }
+
+    #[test]
+    fn to_toml_omits_empty_labels_table() {
+        let p = Profile::from_raw(raw(&[("G1", "a")])).unwrap();
+        assert!(!p.to_toml().unwrap().contains("[labels]"));
     }
 }
