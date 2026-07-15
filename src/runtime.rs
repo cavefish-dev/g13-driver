@@ -4,7 +4,7 @@ use std::sync::{Arc, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
 use anyhow::Result;
-use crate::config::{JoystickMode, ProfileSet};
+use crate::config::ProfileSet;
 use crate::protocol::G13Event;
 use crate::{dispatcher, injector, usb};
 
@@ -36,12 +36,6 @@ pub fn load_config_and_watch(path: PathBuf) -> Result<Arc<RwLock<ProfileSet>>> {
 pub fn run_headless(config: Arc<RwLock<ProfileSet>>) -> Result<()> {
     let injector = Box::new(injector::windows::WindowsInjector::new());
     let mut dispatcher = dispatcher::Dispatcher::new(config.clone(), injector);
-
-    if let Some(j) = config.read().unwrap().active_profile().and_then(|p| p.joystick()) {
-        if j.mode == JoystickMode::Mouse {
-            log::warn!("joystick mouse mode is configured but not yet implemented; stick will be inert");
-        }
-    }
 
     // Supervisor: owns tx and keeps it alive across reconnects, so the dispatch
     // loop's channel never closes in normal operation. Reopens the G13 after a

@@ -32,18 +32,19 @@ pub(crate) struct RawConfig {
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct RawJoystick {
-    #[serde(default = "default_mode")]
-    pub mode: String,
-    #[serde(default = "default_deadzone")]
-    pub deadzone: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deadzone: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub up: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub down: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub left: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub right: Option<String>,
 }
-
-fn default_mode() -> String { "wasd".to_string() }
-fn default_deadzone() -> u16 { 30 }
 
 #[derive(Debug, Deserialize, Clone)]
 struct RawAutoRepeat {
@@ -100,16 +101,8 @@ impl ProfileSource {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum JoystickMode {
-    Wasd,
-    Mouse,
-}
-
 #[derive(Debug, Clone)]
 pub struct JoystickConfig {
-    pub mode: JoystickMode,
-    pub deadzone: u8,
     pub up: Option<String>,
     pub down: Option<String>,
     pub left: Option<String>,
@@ -186,6 +179,10 @@ impl Profile {
         self.joystick.as_ref()
     }
 
+    pub fn set_joystick(&mut self, joystick: Option<JoystickConfig>) {
+        self.joystick = joystick;
+    }
+
     pub fn bindings(&self) -> &HashMap<G13Key, String> {
         &self.key_bindings
     }
@@ -238,17 +235,16 @@ impl Profile {
         let keys: HashMap<String, String> = self.key_bindings.iter()
             .map(|(k, v)| (format!("{k:?}"), v.clone())) // Debug of G13Key is "G1".."G22"
             .collect();
-        let joystick = self.joystick.as_ref().map(|j| RawJoystick {
-            mode: match j.mode {
-                JoystickMode::Wasd => "wasd".to_string(),
-                JoystickMode::Mouse => "mouse".to_string(),
-            },
-            deadzone: j.deadzone as u16,
-            up: j.up.clone(),
-            down: j.down.clone(),
-            left: j.left.clone(),
-            right: j.right.clone(),
-        });
+        let joystick = self.joystick.as_ref()
+            .filter(|j| j.up.is_some() || j.down.is_some() || j.left.is_some() || j.right.is_some())
+            .map(|j| RawJoystick {
+                mode: None,
+                deadzone: None,
+                up: j.up.clone(),
+                down: j.down.clone(),
+                left: j.left.clone(),
+                right: j.right.clone(),
+            });
         let repeat: HashMap<String, bool> = self.repeat.iter()
             .filter(|(_, &v)| v)
             .map(|(k, _)| (format!("{k:?}"), true)) // Debug of G13Key: "G1".."Stick"
@@ -567,17 +563,9 @@ fn parse_g13_key(s: &str) -> Option<G13Key> {
 }
 
 fn parse_joystick(rj: RawJoystick) -> Result<JoystickConfig> {
-    let mode = match rj.mode.to_lowercase().as_str() {
-        "wasd" => JoystickMode::Wasd,
-        "mouse" => JoystickMode::Mouse,
-        other => anyhow::bail!("unknown joystick mode: {} (expected wasd or mouse)", other),
-    };
-    if rj.deadzone > 127 {
-        anyhow::bail!("joystick deadzone {} out of range (0-127)", rj.deadzone);
-    }
+    // `mode` and `deadzone` are legacy per-profile fields, now ignored: the mode is
+    // always directions-only (WASD-style) and the deadzone is global (from the manifest).
     Ok(JoystickConfig {
-        mode,
-        deadzone: rj.deadzone as u8,
         up: rj.up,
         down: rj.down,
         left: rj.left,
@@ -684,7 +672,6 @@ mod profileset_tests {
         assert_eq!(reloaded.get_binding(G13Key::G1), Some("ctrl+c"));
         assert_eq!(reloaded.get_binding(G13Key::G5), Some("f5"));
         let j = reloaded.joystick().expect("joystick preserved");
-        assert_eq!(j.deadzone, 20);
         assert_eq!(j.up.as_deref(), Some("w"));
     }
 
@@ -942,44 +929,45 @@ right = "d"
         let raw: RawConfig = toml::from_str(src).unwrap();
         let config = Profile::from_raw(raw).unwrap();
         let j = config.joystick().expect("joystick config present");
-        assert_eq!(j.mode, JoystickMode::Wasd);
-        assert_eq!(j.deadzone, 30);
         assert_eq!(j.up.as_deref(), Some("w"));
         assert_eq!(j.right.as_deref(), Some("d"));
     }
 
     #[test]
-    fn joystick_mode_defaults_to_wasd() {
-        let src = r#"
-[joystick]
-deadzone = 10
-"#;
+    fn joystick_parses_directions_only() {
+        let src = "[joystick]\nup = \"w\"\nleft = \"a\"\n";
         let raw: RawConfig = toml::from_str(src).unwrap();
-        let config = Profile::from_raw(raw).unwrap();
-        assert_eq!(config.joystick().unwrap().mode, JoystickMode::Wasd);
-        assert_eq!(config.joystick().unwrap().deadzone, 10);
+        let p = Profile::from_raw(raw).unwrap();
+        let j = p.joystick().unwrap();
+        assert_eq!(j.up.as_deref(), Some("w"));
+        assert_eq!(j.left.as_deref(), Some("a"));
+        assert_eq!(j.down, None);
     }
 
     #[test]
-    fn deadzone_default_is_30() {
-        let src = "[joystick]\nup = \"w\"\n";
+    fn legacy_joystick_with_mode_and_deadzone_loads() {
+        let src = "[joystick]\nmode = \"mouse\"\ndeadzone = 200\nup = \"w\"\n";
         let raw: RawConfig = toml::from_str(src).unwrap();
-        let config = Profile::from_raw(raw).unwrap();
-        assert_eq!(config.joystick().unwrap().deadzone, 30);
+        let p = Profile::from_raw(raw).unwrap(); // no error despite mouse + 200
+        assert_eq!(p.joystick().unwrap().up.as_deref(), Some("w"));
     }
 
     #[test]
-    fn deadzone_over_127_is_error() {
-        let src = "[joystick]\ndeadzone = 200\n";
-        let raw: RawConfig = toml::from_str(src).unwrap();
-        assert!(Profile::from_raw(raw).is_err());
+    fn to_toml_joystick_directions_only() {
+        let src = "[joystick]\nmode = \"wasd\"\ndeadzone = 30\nup = \"w\"\n";
+        let p = Profile::from_raw(toml::from_str(src).unwrap()).unwrap();
+        let toml = p.to_toml().unwrap();
+        assert!(toml.contains("up = \"w\""));
+        assert!(!toml.contains("mode"));
+        assert!(!toml.contains("deadzone"));
     }
 
     #[test]
-    fn unknown_joystick_mode_is_error() {
-        let src = "[joystick]\nmode = \"flight\"\n";
-        let raw: RawConfig = toml::from_str(src).unwrap();
-        assert!(Profile::from_raw(raw).is_err());
+    fn to_toml_omits_empty_joystick() {
+        // A joystick with all directions None serializes no [joystick] table.
+        let mut p = Profile::from_raw(raw(&[("G1", "a")])).unwrap();
+        p.set_joystick(Some(JoystickConfig { up: None, down: None, left: None, right: None }));
+        assert!(!p.to_toml().unwrap().contains("[joystick]"));
     }
 
     #[test]

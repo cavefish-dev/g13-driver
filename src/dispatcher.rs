@@ -2,7 +2,7 @@ use anyhow::Result;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
-use crate::config::{JoystickMode, ProfileSet};
+use crate::config::ProfileSet;
 use crate::injector::{KeyCombo, KeyInjector};
 use crate::injector::key_map::tap_only_keys;
 use crate::joystick::{HoldAction, JoystickMapper};
@@ -123,16 +123,14 @@ impl Dispatcher {
     }
 
     fn handle_joystick(&mut self, x: u8, y: u8) {
-        // Read the active profile's joystick config live; clone so the guard is
-        // dropped before we touch the injector.
-        let cfg = {
+        // Snapshot the active profile's joystick directions + the global deadzone under
+        // a short read lock, then drop the guard before we touch the injector.
+        let (cfg, deadzone) = {
             let set = self.profiles.read().unwrap();
-            set.active_profile().and_then(|p| p.joystick())
-                .filter(|j| j.mode == JoystickMode::Wasd)
-                .cloned()
+            (set.active_profile().and_then(|p| p.joystick()).cloned(), set.joystick_deadzone())
         };
         let actions = match &cfg {
-            Some(jc) => self.joystick.update(x, y, jc),
+            Some(jc) => self.joystick.update(x, y, jc, deadzone),
             None => Vec::new(),
         };
         self.apply(actions);
@@ -277,7 +275,7 @@ mod tests {
     fn config_with_joystick() -> Arc<RwLock<ProfileSet>> {
         let d = tmp("joy");
         std::fs::create_dir_all(&d).unwrap();
-        let body = "[keys]\n[joystick]\nmode = \"wasd\"\ndeadzone = 30\nup = \"w\"\ndown = \"s\"\nleft = \"a\"\nright = \"d\"\n";
+        let body = "[keys]\n[joystick]\nup = \"w\"\ndown = \"s\"\nleft = \"a\"\nright = \"d\"\n";
         write(&d.join("config.toml"), body);
         Arc::new(RwLock::new(ProfileSet::load(&d.join("config.toml")).unwrap()))
     }

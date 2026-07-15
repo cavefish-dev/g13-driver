@@ -556,9 +556,11 @@ impl eframe::App for MonitorApp {
 
         egui::TopBottomPanel::bottom("ft").show(ctx, |ui| {
             let set = self.profiles.read().unwrap();
-            let joy = set.active_profile().and_then(|c| c.joystick())
-                .map(|j| format!("joystick: {:?}, deadzone {}", j.mode, j.deadzone))
-                .unwrap_or_else(|| "joystick: disabled".to_string());
+            let joy = if set.active_profile().and_then(|c| c.joystick()).is_some() {
+                format!("joystick: on (deadzone {})", set.joystick_deadzone())
+            } else {
+                "joystick: off".to_string()
+            };
             ui.label(format!("config.toml · {joy}"));
         });
 
@@ -634,15 +636,12 @@ impl MonitorApp {
                     ui.add_space((BLOCK_W - 140.0) * 0.5);
                     ui.vertical(|ui| {
                         ui.label("JOYSTICK");
-                        let (dz, up, down, left, right) = cfg.and_then(|c| c.joystick())
-                            .map(|j| (
-                                j.deadzone,
-                                j.up.clone().unwrap_or_default(),
-                                j.down.clone().unwrap_or_default(),
-                                j.left.clone().unwrap_or_default(),
-                                j.right.clone().unwrap_or_default(),
-                            ))
-                            .unwrap_or((30, "w".into(), "s".into(), "a".into(), "d".into()));
+                        let joy = cfg.and_then(|c| c.joystick());
+                        let dz = set.joystick_deadzone();
+                        let up = joy.and_then(|j| j.up.clone());
+                        let down = joy.and_then(|j| j.down.clone());
+                        let left = joy.and_then(|j| j.left.clone());
+                        let right = joy.and_then(|j| j.right.clone());
 
                         let size = egui::vec2(140.0, 140.0);
                         let (resp, painter) = ui.allocate_painter(size, egui::Sense::hover());
@@ -657,15 +656,22 @@ impl MonitorApp {
 
                         let hot = egui::Color32::from_rgb(127, 224, 160);
                         let dim = egui::Color32::from_gray(140);
+                        let unset = egui::Color32::from_gray(90);
                         let a_left = snapshot.joy_x < 127u8.saturating_sub(dz);
                         let a_right = snapshot.joy_x > 127u8.saturating_add(dz);
                         let a_up = snapshot.joy_y < 127u8.saturating_sub(dz);
                         let a_down = snapshot.joy_y > 127u8.saturating_add(dz);
+                        let show = |ui: &mut egui::Ui, arrow: &str, v: &Option<String>, active: bool| {
+                            match v {
+                                Some(s) => { ui.colored_label(if active { hot } else { dim }, format!("{arrow}{s}")); }
+                                None => { ui.colored_label(unset, format!("{arrow}(unset)")); }
+                            }
+                        };
                         ui.horizontal(|ui| {
-                            ui.colored_label(if a_up { hot } else { dim }, format!("↑{up}"));
-                            ui.colored_label(if a_down { hot } else { dim }, format!("↓{down}"));
-                            ui.colored_label(if a_left { hot } else { dim }, format!("←{left}"));
-                            ui.colored_label(if a_right { hot } else { dim }, format!("→{right}"));
+                            show(ui, "↑", &up, a_up);
+                            show(ui, "↓", &down, a_down);
+                            show(ui, "←", &left, a_left);
+                            show(ui, "→", &right, a_right);
                         });
                     });
                 });
