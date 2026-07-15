@@ -135,6 +135,7 @@ enum Tab {
     Monitor,
     Profiles,
     Bindings,
+    Catalog,
     Lcd,
     Settings,
 }
@@ -156,10 +157,11 @@ enum Action {
     Prompt(NamePrompt),
 }
 
-const TABS: [(Tab, &str); 5] = [
+const TABS: [(Tab, &str); 6] = [
     (Tab::Monitor, "Monitor"),
     (Tab::Profiles, "Profiles"),
     (Tab::Bindings, "Bindings"),
+    (Tab::Catalog, "Catalog"),
     (Tab::Lcd, "LCD"),
     (Tab::Settings, "Settings"),
 ];
@@ -190,6 +192,8 @@ pub struct MonitorApp {
     name_prompt: Option<NamePrompt>,
     pending_delete: Option<String>,
     profiles_status: Option<String>,
+    catalog_state: std::sync::Arc<std::sync::Mutex<crate::catalog::CatalogState>>,
+    catalog_status: std::sync::Arc<std::sync::Mutex<Option<String>>>,
 }
 
 impl MonitorApp {
@@ -226,6 +230,8 @@ impl MonitorApp {
             name_prompt: None,
             pending_delete: None,
             profiles_status: None,
+            catalog_state: std::sync::Arc::new(std::sync::Mutex::new(crate::catalog::CatalogState::Idle)),
+            catalog_status: std::sync::Arc::new(std::sync::Mutex::new(None)),
         };
 
         // Windows: build the tray from the current state and start the
@@ -438,6 +444,26 @@ fn spawn_update_check(
     });
 }
 
+/// Fetch the GitHub catalog index on a background thread and store the result.
+fn spawn_catalog_refresh(
+    state: std::sync::Arc<std::sync::Mutex<crate::catalog::CatalogState>>,
+    ctx: egui::Context,
+) {
+    std::thread::spawn(move || {
+        *state.lock().unwrap() = crate::catalog::CatalogState::Loading;
+        ctx.request_repaint();
+        let next = match crate::catalog::fetch_index() {
+            Ok(entries) => crate::catalog::CatalogState::Loaded(entries),
+            Err(e) => {
+                log::warn!("catalog refresh failed: {e:#}");
+                crate::catalog::CatalogState::Failed("couldn't load the catalog".into())
+            }
+        };
+        *state.lock().unwrap() = next;
+        ctx.request_repaint();
+    });
+}
+
 // Physical G13 key arrangement: rows of 7, 7, 5, 3. Each row is centered when
 // rendered, so the short rows sit under the wide ones and the whole block is
 // centered in the window.
@@ -542,6 +568,7 @@ impl eframe::App for MonitorApp {
                 Tab::Monitor => self.render_monitor(ui, &snapshot),
                 Tab::Profiles => self.render_profiles(ui),
                 Tab::Bindings => self.render_bindings(ui),
+                Tab::Catalog => self.render_catalog(ui),
                 Tab::Lcd => self.render_lcd(ui),
                 Tab::Settings => self.render_settings(ui),
             }
@@ -1022,6 +1049,76 @@ impl MonitorApp {
         if !all_valid {
             ui.colored_label(red, "Fix the invalid (bad) combos before saving.");
         }
+    }
+
+    fn render_catalog(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Catalog");
+        ui.label("Download curated profiles from the g13-driver GitHub repo.");
+        ui.add_space(6.0);
+
+        if ui.button("Refresh").clicked() {
+            spawn_catalog_refresh(self.catalog_state.clone(), ui.ctx().clone());
+        }
+        ui.add_space(8.0);
+
+        // Snapshot state + local origins under short locks.
+        let state = self.catalog_state.lock().unwrap().clone();
+        let dir = self.profiles.read().unwrap().profiles_dir().to_path_buf();
+
+        match state {
+            crate::catalog::CatalogState::Idle =>
+                { ui.weak("Refresh to load the profile catalog from GitHub."); }
+            crate::catalog::CatalogState::Loading =>
+                { ui.weak("Loading…"); }
+            crate::catalog::CatalogState::Failed(msg) =>
+                { ui.colored_label(egui::Color32::from_rgb(220,90,90), msg); }
+            crate::catalog::CatalogState::Loaded(entries) => {
+                let local_origins: std::collections::HashSet<String> = crate::profiles::list(&dir)
+                    .into_iter().filter_map(|e| e.origin).collect();
+                let marked = crate::catalog::mark_downloaded(entries, &local_origins);
+                let mut to_download: Option<String> = None;
+                egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
+                    for (entry, downloaded) in &marked {
+                        ui.horizontal(|ui| {
+                            ui.label(&entry.name);
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                if *downloaded {
+                                    ui.add_enabled(false, egui::Button::new("Downloaded"));
+                                } else if ui.button("Download").clicked() {
+                                    to_download = Some(entry.filename.clone());
+                                }
+                            });
+                        });
+                    }
+                });
+                if let Some(filename) = to_download {
+                    self.start_download(&dir, &filename, ui.ctx().clone());
+                }
+            }
+        }
+
+        if let Some(s) = self.catalog_status.lock().unwrap().clone() {
+            ui.add_space(6.0);
+            ui.weak(s);
+        }
+    }
+
+    fn start_download(&mut self, dir: &std::path::Path, filename: &str, ctx: egui::Context) {
+        let dir = dir.to_path_buf();
+        let filename = filename.to_string();
+        let profiles = self.profiles.clone();
+        let config_path = self.config_path.clone();
+        let status = self.catalog_status.clone();
+        *status.lock().unwrap() = Some(format!("Downloading {filename}…"));
+        std::thread::spawn(move || {
+            let msg = match crate::catalog::download(&dir, &filename)
+                .and_then(|local| crate::runtime::reload_now(&profiles, &config_path).map(|_| local)) {
+                Ok(local) => format!("Downloaded {local}."),
+                Err(e) => { log::warn!("download failed: {e:#}"); format!("Download failed: {e}") }
+            };
+            *status.lock().unwrap() = Some(msg);
+            ctx.request_repaint();
+        });
     }
 
     fn render_lcd(&self, ui: &mut egui::Ui) {
