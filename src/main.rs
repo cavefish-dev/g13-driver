@@ -4,6 +4,7 @@
 compile_error!("g13-driver v0.1 targets Windows only; Linux support is planned for v1.0");
 
 mod autostart;
+mod catalog;
 mod config;
 mod device_state;
 mod dispatcher;
