@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::path::Path;
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use crate::config::{Profile, ProfileSource};
@@ -54,6 +55,51 @@ pub fn parse_profile(body: &str, filename: &str) -> Result<Profile> {
         .with_context(|| format!("catalog profile {filename} is not valid TOML"))?;
     Profile::from_raw(raw)
         .with_context(|| format!("catalog profile {filename} is not a valid profile"))
+}
+
+fn user_agent() -> String {
+    format!("g13-driver/{}", env!("G13_VERSION"))
+}
+
+fn http_get(url: &str) -> Result<String> {
+    let body = ureq::get(url)
+        .header("User-Agent", &user_agent())
+        .call()?
+        .body_mut()
+        .read_to_string()?;
+    Ok(body)
+}
+
+/// Fetch + parse the catalog index.
+pub fn fetch_index() -> Result<Vec<CatalogEntry>> {
+    let body = http_get(&index_url())?;
+    parse_index(&body)
+}
+
+/// Fetch + validate a catalog profile by its catalog filename.
+fn fetch_profile(filename: &str) -> Result<Profile> {
+    let body = http_get(&profile_url(filename))?;
+    parse_profile(&body, filename)
+}
+
+/// Download a catalog profile into `dir` (stamped), returning the new local filename.
+pub fn download(dir: &Path, filename: &str) -> Result<String> {
+    let mut profile = fetch_profile(filename)?;
+    stamp_download(&mut profile, filename);
+    let label = profile.meta_name().unwrap_or(filename.trim_end_matches(".toml")).to_string();
+    let local = crate::profiles::unique_filename(dir, &label);
+    std::fs::write(dir.join(&local), profile.to_toml()?)
+        .with_context(|| format!("failed to write {local}"))?;
+    Ok(local)
+}
+
+/// Revert the file at `path` to its upstream (`origin`) version, wholesale.
+pub fn revert(path: &Path, origin: &str) -> Result<()> {
+    let mut profile = fetch_profile(origin)?;
+    stamp_download(&mut profile, origin);
+    std::fs::write(path, profile.to_toml()?)
+        .with_context(|| format!("failed to write {}", path.display()))?;
+    Ok(())
 }
 
 #[cfg(test)]
