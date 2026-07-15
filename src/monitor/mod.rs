@@ -5,7 +5,7 @@ use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::time::{Duration, Instant};
 use anyhow::Result;
 use eframe::egui;
-use crate::config::{ProfileSet, ProfileSource};
+use crate::config::{JoystickConfig, ProfileSet, ProfileSource};
 use crate::device_state::{Connection, DeviceState};
 use crate::dispatcher::Dispatcher;
 use crate::injector::{KeyCombo, key_map::build_key_map, windows::WindowsInjector};
@@ -185,6 +185,7 @@ pub struct MonitorApp {
     edits: HashMap<G13Key, String>,
     repeat_edits: HashMap<G13Key, bool>,
     label_edits: HashMap<G13Key, String>,
+    joy_edits: [String; 4],
     edits_for: Option<String>,
     save_status: Option<String>,
     #[cfg(windows)]
@@ -225,6 +226,7 @@ impl MonitorApp {
             edits: HashMap::new(),
             repeat_edits: HashMap::new(),
             label_edits: HashMap::new(),
+            joy_edits: [String::new(), String::new(), String::new(), String::new()],
             edits_for: None,
             save_status: None,
             #[cfg(windows)]
@@ -984,6 +986,13 @@ impl MonitorApp {
                 self.label_edits = ROWS.iter().flat_map(|row| row.iter()).chain(THUMB.iter())
                     .map(|&k| (k, profile.label(k).unwrap_or_default().to_string()))
                     .collect();
+                let j = profile.joystick();
+                self.joy_edits = [
+                    j.and_then(|j| j.up.clone()).unwrap_or_default(),
+                    j.and_then(|j| j.down.clone()).unwrap_or_default(),
+                    j.and_then(|j| j.left.clone()).unwrap_or_default(),
+                    j.and_then(|j| j.right.clone()).unwrap_or_default(),
+                ];
             }
             drop(set);
             self.edits_for = active_name.clone();
@@ -1036,7 +1045,15 @@ impl MonitorApp {
                         .filter(|(_, v)| !v.trim().is_empty())
                         .map(|(k, v)| (*k, v.clone()))
                         .collect();
-                    match self.profiles.write().unwrap().save_active_bindings(bindings, repeat, labels, None) {
+                    let mk = |s: &str| -> Option<String> { let s = s.trim(); if s.is_empty() { None } else { Some(s.to_string()) } };
+                    let jc = JoystickConfig {
+                        up: mk(&self.joy_edits[0]), down: mk(&self.joy_edits[1]),
+                        left: mk(&self.joy_edits[2]), right: mk(&self.joy_edits[3]),
+                    };
+                    let joystick = if jc.up.is_some() || jc.down.is_some() || jc.left.is_some() || jc.right.is_some() {
+                        Some(jc)
+                    } else { None };
+                    match self.profiles.write().unwrap().save_active_bindings(bindings, repeat, labels, joystick) {
                         Ok(()) => self.save_status = Some("saved".to_string()),
                         Err(e) => {
                             log::warn!("save failed: {e:#}");
@@ -1088,6 +1105,23 @@ impl MonitorApp {
             ui.label("Thumb buttons");
             for &key in THUMB.iter() {
                 render_binding_row(ui, key, &mut self.edits, &mut self.repeat_edits, &mut self.label_edits, &valid_keys);
+            }
+            ui.add_space(6.0);
+            ui.separator();
+            ui.label("Joystick");
+            let dim = egui::Color32::from_gray(110);
+            let green = egui::Color32::from_rgb(127, 224, 160);
+            let red = egui::Color32::from_rgb(220, 90, 90);
+            for (i, name) in ["Up", "Down", "Left", "Right"].iter().enumerate() {
+                ui.horizontal(|ui| {
+                    ui.monospace(format!("{name:>5}"));
+                    ui.add_space(6.0);
+                    ui.add(egui::TextEdit::singleline(&mut self.joy_edits[i]).desired_width(160.0));
+                    let b = &self.joy_edits[i];
+                    let (mark, color) = if b.is_empty() { ("—", dim) }
+                        else if combo_valid(b, &valid_keys) { ("ok", green) } else { ("bad", red) };
+                    ui.colored_label(color, mark);
+                });
             }
         });
 
