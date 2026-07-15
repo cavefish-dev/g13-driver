@@ -617,6 +617,8 @@ impl MonitorApp {
                                 ui.vertical(|ui| {
                                     ui.strong(format!("{key:?}"));
                                     ui.add(egui::Label::new(egui::RichText::new(binding).small()).truncate());
+                                    let label = cfg.and_then(|c| c.label(key)).unwrap_or("");
+                                    ui.add(egui::Label::new(egui::RichText::new(label).small().weak()).truncate());
                                 });
                             });
                         }
