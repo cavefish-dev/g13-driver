@@ -1269,6 +1269,17 @@ impl MonitorApp {
         }
         ui.add_space(6.0);
         ui.weak("Close or minimize hides to the tray; the driver keeps running. Quit from the tray to exit.");
+        ui.add_space(8.0);
+        ui.separator();
+        ui.label("Joystick deadzone");
+        let mut dz = self.profiles.read().unwrap().joystick_deadzone();
+        if ui.add(egui::Slider::new(&mut dz, 0..=127)).changed() {
+            self.profiles.write().unwrap().set_joystick_deadzone(dz);
+            if let Err(e) = self.profiles.read().unwrap().persist_joystick_deadzone(dz) {
+                log::warn!("persist deadzone failed: {e:#}");
+            }
+        }
+        ui.weak("Distance the stick must move from center before a direction fires (applies to all profiles).");
     }
 }
 
