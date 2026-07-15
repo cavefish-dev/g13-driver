@@ -12,6 +12,8 @@ pub(crate) struct RawMeta {
     pub source: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub modified: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -113,6 +115,7 @@ pub struct Profile {
     meta_name: Option<String>,
     source: ProfileSource,
     modified: bool,
+    origin: Option<String>,
 }
 
 impl Profile {
@@ -144,16 +147,17 @@ impl Profile {
             None => None,
         };
 
-        let (meta_name, source, modified) = match raw.meta {
+        let (meta_name, source, modified, origin) = match raw.meta {
             Some(m) => (
                 m.name.map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
                 m.source.as_deref().map(ProfileSource::parse).unwrap_or_default(),
                 m.modified.unwrap_or(false),
+                m.origin.map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
             ),
-            None => (None, ProfileSource::User, false),
+            None => (None, ProfileSource::User, false, None),
         };
 
-        Ok(Self { key_bindings, joystick, repeat, meta_name, source, modified })
+        Ok(Self { key_bindings, joystick, repeat, meta_name, source, modified, origin })
     }
 
     pub fn get_binding(&self, key: G13Key) -> Option<&str> {
@@ -186,6 +190,10 @@ impl Profile {
     pub fn set_source(&mut self, source: ProfileSource) { self.source = source; }
     pub fn modified(&self) -> bool { self.modified }
     pub fn set_modified(&mut self, modified: bool) { self.modified = modified; }
+    pub fn origin(&self) -> Option<&str> { self.origin.as_deref() }
+    pub fn set_origin(&mut self, origin: Option<String>) {
+        self.origin = origin.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    }
 
     pub fn repeats(&self, key: G13Key) -> bool {
         *self.repeat.get(&key).unwrap_or(&false)
@@ -220,8 +228,9 @@ impl Profile {
             let name = self.meta_name.clone();
             let source = self.source.as_str().map(str::to_string);
             let modified = if self.modified { Some(true) } else { None };
-            if name.is_some() || source.is_some() || modified.is_some() {
-                Some(RawMeta { name, source, modified })
+            let origin = self.origin.clone();
+            if name.is_some() || source.is_some() || modified.is_some() || origin.is_some() {
+                Some(RawMeta { name, source, modified, origin })
             } else {
                 None
             }
@@ -240,6 +249,7 @@ impl Default for Profile {
             meta_name: None,
             source: ProfileSource::User,
             modified: false,
+            origin: None,
         }
     }
 }
@@ -1034,5 +1044,36 @@ G3 = "f5"
         let toml = p.to_toml().unwrap();
         assert!(toml.contains("source = \"github\""));
         assert!(!toml.contains("modified"));
+    }
+
+    #[test]
+    fn parses_origin() {
+        let src = "[meta]\nname = \"G\"\nsource = \"github\"\norigin = \"gaming.toml\"\n[keys]\nG1 = \"a\"\n";
+        let p = Profile::from_raw(toml::from_str(src).unwrap()).unwrap();
+        assert_eq!(p.origin(), Some("gaming.toml"));
+    }
+
+    #[test]
+    fn origin_absent_is_none() {
+        let p = Profile::from_raw(raw(&[("G1", "a")])).unwrap();
+        assert_eq!(p.origin(), None);
+    }
+
+    #[test]
+    fn to_toml_round_trips_origin() {
+        let mut p = Profile::from_raw(raw(&[("G1", "a")])).unwrap();
+        p.set_source(ProfileSource::Github);
+        p.set_origin(Some("gaming.toml".to_string()));
+        let toml = p.to_toml().unwrap();
+        assert!(toml.contains("origin = \"gaming.toml\""));
+        let reloaded = Profile::from_raw(toml::from_str(&toml).unwrap()).unwrap();
+        assert_eq!(reloaded.origin(), Some("gaming.toml"));
+    }
+
+    #[test]
+    fn user_profile_omits_origin() {
+        let p = Profile::from_raw(raw(&[("G1", "a")])).unwrap();
+        let toml = p.to_toml().unwrap();
+        assert!(!toml.contains("origin"));
     }
 }
