@@ -81,6 +81,7 @@ fn render_binding_row(
     key: G13Key,
     edits: &mut HashMap<G13Key, String>,
     repeat_edits: &mut HashMap<G13Key, bool>,
+    label_edits: &mut HashMap<G13Key, String>,
     valid_keys: &HashSet<String>,
 ) {
     let green = egui::Color32::from_rgb(127, 224, 160);
@@ -88,6 +89,7 @@ fn render_binding_row(
     let dim = egui::Color32::from_gray(110);
     let buf = edits.entry(key).or_default();
     let rep = repeat_edits.entry(key).or_default();
+    let lbl = label_edits.entry(key).or_default();
     ui.horizontal(|ui| {
         ui.monospace(format!("{key:?}"));
         ui.add_space(6.0);
@@ -102,6 +104,8 @@ fn render_binding_row(
         ui.colored_label(color, mark);
         ui.add_space(6.0);
         ui.checkbox(rep, "repeat");
+        ui.add_space(6.0);
+        ui.add(egui::TextEdit::singleline(lbl).desired_width(140.0).hint_text("label (optional)"));
     });
 }
 
@@ -180,6 +184,7 @@ pub struct MonitorApp {
     tab: Tab,
     edits: HashMap<G13Key, String>,
     repeat_edits: HashMap<G13Key, bool>,
+    label_edits: HashMap<G13Key, String>,
     edits_for: Option<String>,
     save_status: Option<String>,
     #[cfg(windows)]
@@ -219,6 +224,7 @@ impl MonitorApp {
             tab: Tab::Monitor,
             edits: HashMap::new(),
             repeat_edits: HashMap::new(),
+            label_edits: HashMap::new(),
             edits_for: None,
             save_status: None,
             #[cfg(windows)]
@@ -967,6 +973,9 @@ impl MonitorApp {
                 self.repeat_edits = ROWS.iter().flat_map(|row| row.iter()).chain(THUMB.iter())
                     .map(|&k| (k, profile.repeats(k)))
                     .collect();
+                self.label_edits = ROWS.iter().flat_map(|row| row.iter()).chain(THUMB.iter())
+                    .map(|&k| (k, profile.label(k).unwrap_or_default().to_string()))
+                    .collect();
             }
             drop(set);
             self.edits_for = active_name.clone();
@@ -1015,7 +1024,11 @@ impl MonitorApp {
                         .filter(|(_, &v)| v)
                         .map(|(k, &v)| (*k, v))
                         .collect();
-                    match self.profiles.write().unwrap().save_active_bindings(bindings, repeat, HashMap::new()) {
+                    let labels: HashMap<G13Key, String> = self.label_edits.iter()
+                        .filter(|(_, v)| !v.trim().is_empty())
+                        .map(|(k, v)| (*k, v.clone()))
+                        .collect();
+                    match self.profiles.write().unwrap().save_active_bindings(bindings, repeat, labels) {
                         Ok(()) => self.save_status = Some("saved".to_string()),
                         Err(e) => {
                             log::warn!("save failed: {e:#}");
@@ -1060,13 +1073,13 @@ impl MonitorApp {
 
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             for &key in ROWS.iter().flat_map(|row| row.iter()) {
-                render_binding_row(ui, key, &mut self.edits, &mut self.repeat_edits, &valid_keys);
+                render_binding_row(ui, key, &mut self.edits, &mut self.repeat_edits, &mut self.label_edits, &valid_keys);
             }
             ui.add_space(6.0);
             ui.separator();
             ui.label("Thumb buttons");
             for &key in THUMB.iter() {
-                render_binding_row(ui, key, &mut self.edits, &mut self.repeat_edits, &valid_keys);
+                render_binding_row(ui, key, &mut self.edits, &mut self.repeat_edits, &mut self.label_edits, &valid_keys);
             }
         });
 
