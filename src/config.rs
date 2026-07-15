@@ -56,6 +56,13 @@ struct RawAutoRepeat {
 fn default_delay_ms() -> u64 { 400 }
 fn default_interval_ms() -> u64 { 40 }
 
+#[derive(Debug, Deserialize)]
+struct RawManifestJoystick {
+    #[serde(default = "default_global_deadzone")]
+    deadzone: u16,
+}
+fn default_global_deadzone() -> u16 { 30 }
+
 /// Global auto-repeat timing (from the manifest `[autorepeat]`; defaults when absent).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AutoRepeat {
@@ -297,6 +304,8 @@ struct RawManifest {
     autorepeat: Option<RawAutoRepeat>,
     #[serde(default)]
     app: Option<RawApp>,
+    #[serde(default)]
+    joystick: Option<RawManifestJoystick>,
 }
 
 /// The loaded profiles plus which M-key is active. Replaces a bare `Profile`
@@ -314,6 +323,7 @@ pub struct ProfileSet {
     /// returns `None` and the driver injects nothing.
     active: MKey,
     autorepeat: AutoRepeat,
+    joystick_deadzone: u8,
     config_path: PathBuf,
     start_active: bool,
 }
@@ -331,6 +341,7 @@ impl ProfileSet {
         let base = config_path.parent().unwrap_or_else(|| Path::new("."));
         let autorepeat = raw.autorepeat.map(AutoRepeat::from_raw).unwrap_or_default();
         let start_active = raw.app.as_ref().map(|a| a.start_active).unwrap_or(false);
+        let joystick_deadzone = raw.joystick.map(|j| j.deadzone.min(127) as u8).unwrap_or(30);
 
         // Manifest mode when ANY of profiles_dir/m1/m2/m3 is present.
         let is_manifest = raw.profiles_dir.is_some() || raw.m1.is_some()
@@ -357,6 +368,7 @@ impl ProfileSet {
                 m1_name, m2_name, m3_name,
                 active: MKey::M1,
                 autorepeat,
+                joystick_deadzone,
                 config_path: config_path.to_path_buf(),
                 start_active,
             })
@@ -370,6 +382,7 @@ impl ProfileSet {
                 m1_name: name, m2_name: None, m3_name: None,
                 active: MKey::M1,
                 autorepeat,
+                joystick_deadzone,
                 config_path: config_path.to_path_buf(),
                 start_active,
             })
@@ -379,6 +392,12 @@ impl ProfileSet {
     pub fn active(&self) -> MKey { self.active }
 
     pub fn autorepeat(&self) -> AutoRepeat { self.autorepeat }
+
+    pub fn joystick_deadzone(&self) -> u8 { self.joystick_deadzone }
+
+    pub fn set_joystick_deadzone(&mut self, deadzone: u8) {
+        self.joystick_deadzone = deadzone.min(127);
+    }
 
     pub fn start_active(&self) -> bool { self.start_active }
 
@@ -413,6 +432,23 @@ impl ProfileSet {
         let mut doc = text.parse::<DocumentMut>()
             .with_context(|| format!("failed to parse {}", self.config_path.display()))?;
         doc["profiles_dir"] = toml_value(dir.display().to_string());
+        std::fs::write(&self.config_path, doc.to_string())
+            .with_context(|| format!("failed to write {}", self.config_path.display()))?;
+        Ok(())
+    }
+
+    /// Write `[joystick] deadzone` into the manifest, preserving every other key and
+    /// comment (format-preserving via toml_edit). Best-effort; callers log on error.
+    pub fn persist_joystick_deadzone(&self, deadzone: u8) -> Result<()> {
+        use toml_edit::{DocumentMut, Item, Table, value as toml_value};
+        let text = std::fs::read_to_string(&self.config_path)
+            .with_context(|| format!("failed to read {}", self.config_path.display()))?;
+        let mut doc = text.parse::<DocumentMut>()
+            .with_context(|| format!("failed to parse {}", self.config_path.display()))?;
+        if !doc.as_table().contains_key("joystick") {
+            doc.as_table_mut().insert("joystick", Item::Table(Table::new()));
+        }
+        doc["joystick"]["deadzone"] = toml_value(deadzone.min(127) as i64);
         std::fs::write(&self.config_path, doc.to_string())
             .with_context(|| format!("failed to write {}", self.config_path.display()))?;
         Ok(())
@@ -816,6 +852,37 @@ mod profileset_tests {
         let text = std::fs::read_to_string(d.join("profiles/u.toml")).unwrap();
         assert!(!text.contains("modified"), "user profile stays clean");
         assert!(!text.contains("source"), "user profile stays clean");
+    }
+
+    #[test]
+    fn global_deadzone_defaults_to_30() {
+        let d = tmp("gdz-default");
+        write(&d, "config.toml", "[keys]\nG1 = \"a\"\n");
+        let set = ProfileSet::load(&d.join("config.toml")).unwrap();
+        assert_eq!(set.joystick_deadzone(), 30);
+    }
+
+    #[test]
+    fn global_deadzone_parses_and_clamps() {
+        let d = tmp("gdz-parse");
+        write(&d.join("profiles"), "p.toml", "[keys]\nG1 = \"a\"\n");
+        write(&d, "config.toml",
+            "profiles_dir = \"profiles\"\nm1 = \"p.toml\"\n[joystick]\ndeadzone = 200\n");
+        let set = ProfileSet::load(&d.join("config.toml")).unwrap();
+        assert_eq!(set.joystick_deadzone(), 127); // clamped
+    }
+
+    #[test]
+    fn persist_joystick_deadzone_writes_and_reloads() {
+        let d = tmp("gdz-persist");
+        write(&d.join("profiles"), "p.toml", "[keys]\nG1 = \"a\"\n");
+        write(&d, "config.toml", "# manifest\nprofiles_dir = \"profiles\"\nm1 = \"p.toml\"\n");
+        let set = ProfileSet::load(&d.join("config.toml")).unwrap();
+        set.persist_joystick_deadzone(42).unwrap();
+        let reloaded = ProfileSet::load(&d.join("config.toml")).unwrap();
+        assert_eq!(reloaded.joystick_deadzone(), 42);
+        let text = std::fs::read_to_string(d.join("config.toml")).unwrap();
+        assert!(text.contains("# manifest"), "comment preserved");
     }
 
     #[test]
