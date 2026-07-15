@@ -1,0 +1,62 @@
+name: Catalog Index
+
+on:
+  push:
+    branches: [main]
+    paths: ['catalog/**.toml']
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: catalog-index
+  cancel-in-progress: false
+
+jobs:
+  regenerate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Build index.json from catalog/*.toml
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json, pathlib, tomllib
+          cat = pathlib.Path("catalog")
+          entries = []
+          for p in sorted(cat.glob("*.toml")):
+              if p.name == "index.json":
+                  continue
+              try:
+                  data = tomllib.loads(p.read_text(encoding="utf-8"))
+              except Exception:
+                  data = {}
+              name = (data.get("meta") or {}).get("name") or p.stem
+              entries.append({"filename": p.name, "name": name})
+          entries.sort(key=lambda e: e["filename"])
+          out = cat / "index.json"
+          out.write_text(json.dumps(entries, indent=2) + "\n", encoding="utf-8")
+          print(out.read_text())
+          PY
+      - name: Commit index.json if changed (verified bot commit via API)
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdc9 # v7.0.1
+        with:
+          script: |
+            const fs = require('fs');
+            const path = 'catalog/index.json';
+            const content = fs.readFileSync(path, 'utf8');
+            const b64 = Buffer.from(content, 'utf8').toString('base64');
+            let sha;
+            try {
+              const { data } = await github.rest.repos.getContent({
+                owner: context.repo.owner, repo: context.repo.repo, path, ref: 'main' });
+              sha = data.sha;
+              const current = Buffer.from(data.content, 'base64').toString('utf8');
+              if (current === content) { core.info('index.json unchanged'); return; }
+            } catch (e) { core.info('index.json does not exist yet'); }
+            await github.rest.repos.createOrUpdateFileContents({
+              owner: context.repo.owner, repo: context.repo.repo, path,
+              message: 'chore: regenerate catalog index.json',
+              content: b64, sha, branch: 'main' });
+            core.info('index.json committed');

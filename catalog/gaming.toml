@@ -1,0 +1,21 @@
+# Gaming profile — number row + WASD on the stick.
+
+[meta]
+name = "Gaming"
+
+[keys]
+G1 = "1"
+G2 = "2"
+G3 = "3"
+G4 = "4"
+G5 = "r"
+G6 = "f"
+G7 = "space"
+
+[joystick]
+mode = "wasd"
+deadzone = 30
+up = "w"
+down = "s"
+left = "a"
+right = "d"

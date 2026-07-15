@@ -1,0 +1,15 @@
+# Coding profile — common editor shortcuts.
+
+[meta]
+name = "Coding"
+
+[keys]
+G1 = "ctrl+c"
+G2 = "ctrl+v"
+G3 = "ctrl+shift+k"
+G4 = "ctrl+f"
+G5 = "f2"
+G6 = "f12"
+G7 = "ctrl+shift+f"
+G8 = "ctrl+b"
+G9 = "ctrl+t"
