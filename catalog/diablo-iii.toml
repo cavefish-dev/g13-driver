@@ -1,0 +1,40 @@
+# Diablo III profile — skills, potions, inventory, and map shortcuts.
+
+[meta]
+name = "Diablo III"
+
+[keys]
+G3  = "q"
+G4  = "1"
+G5  = "tab"
+G10 = "2"
+G11 = "3"
+G12 = "4"
+G15 = "s"
+G16 = "i"
+G17 = "j"
+G18 = "y"
+G19 = "esc"
+G20 = "t"
+G21 = "m"
+G22 = "g"
+Btn1 = "shift"
+Btn2 = "space"
+
+[labels]
+G3  = "Health potion"
+G4  = "Skill 1"
+G5  = "Local map"
+G10 = "Skill 2"
+G11 = "Skill 3"
+G12 = "Skill 4"
+G15 = "Skill menu"
+G16 = "Inventory"
+G17 = "Quests"
+G18 = "Achievements"
+G19 = "Menu"
+G20 = "Teleport"
+G21 = "World map"
+G22 = "Banner"
+Btn1 = "Stand still"
+Btn2 = "Close all windows"

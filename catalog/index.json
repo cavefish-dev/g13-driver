@@ -1,4 +1,14 @@
 [
-  {"filename": "coding.toml", "name": "Coding"},
-  {"filename": "gaming.toml", "name": "Gaming"}
+  {
+    "filename": "coding.toml",
+    "name": "Coding"
+  },
+  {
+    "filename": "diablo-iii.toml",
+    "name": "Diablo III"
+  },
+  {
+    "filename": "gaming.toml",
+    "name": "Gaming"
+  }
 ]
