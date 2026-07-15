@@ -1015,7 +1015,7 @@ impl MonitorApp {
                         .filter(|(_, &v)| v)
                         .map(|(k, &v)| (*k, v))
                         .collect();
-                    match self.profiles.write().unwrap().save_active_bindings(bindings, repeat) {
+                    match self.profiles.write().unwrap().save_active_bindings(bindings, repeat, HashMap::new()) {
                         Ok(()) => self.save_status = Some("saved".to_string()),
                         Err(e) => {
                             log::warn!("save failed: {e:#}");

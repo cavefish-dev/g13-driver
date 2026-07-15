@@ -484,12 +484,13 @@ impl ProfileSet {
         }
     }
 
-    /// Replace the active profile's key bindings and repeat flags (joystick untouched) and write
-    /// the profile file. The watcher will reload the identical content.
+    /// Replace the active profile's key bindings, repeat flags, and labels (joystick untouched)
+    /// and write the profile file. The watcher will reload the identical content.
     pub fn save_active_bindings(
         &mut self,
         bindings: HashMap<G13Key, String>,
         repeat: HashMap<G13Key, bool>,
+        labels: HashMap<G13Key, String>,
     ) -> Result<()> {
         if self.active_name().is_none() || self.active_profile().is_none() {
             anyhow::bail!("no profile in the active slot");
@@ -498,6 +499,7 @@ impl ProfileSet {
         let profile = self.active_profile_mut().expect("checked above");
         profile.set_bindings(bindings);
         profile.set_repeat(repeat);
+        profile.set_labels(labels);
         if profile.source() == ProfileSource::Github {
             profile.set_modified(true);
         }
@@ -651,6 +653,25 @@ mod profileset_tests {
     }
 
     #[test]
+    fn save_active_bindings_writes_labels() {
+        let d = tmp("save-labels");
+        write(&d.join("profiles"), "p.toml", "[keys]\nG1 = \"a\"\n");
+        write(&d, "config.toml", "profiles_dir = \"profiles\"\nm1 = \"p.toml\"\n");
+        let mut set = ProfileSet::load(&d.join("config.toml")).unwrap();
+        let mut b = HashMap::new();
+        b.insert(G13Key::G1, "ctrl+c".to_string());
+        let mut labels = HashMap::new();
+        labels.insert(G13Key::G1, "Copy".to_string());
+        set.save_active_bindings(b, HashMap::new(), labels).unwrap();
+        let text = std::fs::read_to_string(d.join("profiles/p.toml")).unwrap();
+        assert!(text.contains("[labels]"));
+        assert!(text.contains("Copy"));
+        // reloads with the label intact
+        let reloaded = ProfileSet::load(&d.join("config.toml")).unwrap();
+        assert_eq!(reloaded.active_profile().unwrap().label(G13Key::G1), Some("Copy"));
+    }
+
+    #[test]
     fn save_active_bindings_writes_and_preserves_others() {
         let d = tmp("save");
         write(&d.join("profiles"), "default.toml", "[keys]\nG1 = \"ctrl+c\"\n[joystick]\nup = \"w\"\n");
@@ -662,7 +683,7 @@ mod profileset_tests {
         let mut b = HashMap::new();
         b.insert(G13Key::G1, "ctrl+a".to_string());
         b.insert(G13Key::G2, "f1".to_string());
-        set.save_active_bindings(b, HashMap::new()).unwrap();
+        set.save_active_bindings(b, HashMap::new(), HashMap::new()).unwrap();
 
         // Fresh load from disk reflects the change; joystick preserved; game untouched.
         let reloaded = ProfileSet::load(&d.join("config.toml")).unwrap();
@@ -777,7 +798,7 @@ mod profileset_tests {
         let mut set = ProfileSet::load(&d.join("config.toml")).unwrap();
         let mut b = HashMap::new();
         b.insert(G13Key::G1, "ctrl+c".to_string());
-        set.save_active_bindings(b, HashMap::new()).unwrap();
+        set.save_active_bindings(b, HashMap::new(), HashMap::new()).unwrap();
         let text = std::fs::read_to_string(d.join("profiles/g.toml")).unwrap();
         assert!(text.contains("modified = true"), "github profile flips modified on save");
         assert!(text.contains("source = \"github\""), "source preserved");
@@ -791,7 +812,7 @@ mod profileset_tests {
         let mut set = ProfileSet::load(&d.join("config.toml")).unwrap();
         let mut b = HashMap::new();
         b.insert(G13Key::G1, "ctrl+c".to_string());
-        set.save_active_bindings(b, HashMap::new()).unwrap();
+        set.save_active_bindings(b, HashMap::new(), HashMap::new()).unwrap();
         let text = std::fs::read_to_string(d.join("profiles/u.toml")).unwrap();
         assert!(!text.contains("modified"), "user profile stays clean");
         assert!(!text.contains("source"), "user profile stays clean");
