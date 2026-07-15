@@ -10,3 +10,10 @@ G2 = "left"
 G3 = "right"
 G4 = "up"
 G5 = "down"
+
+[labels]
+G1 = "Play/Pause"
+G2 = "Previous"
+G3 = "Next"
+G4 = "Volume Up"
+G5 = "Volume Down"

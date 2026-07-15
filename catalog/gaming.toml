@@ -12,6 +12,15 @@ G5 = "r"
 G6 = "f"
 G7 = "space"
 
+[labels]
+G1 = "Slot 1"
+G2 = "Slot 2"
+G3 = "Slot 3"
+G4 = "Slot 4"
+G5 = "Reload"
+G6 = "Use"
+G7 = "Jump"
+
 [joystick]
 mode = "wasd"
 deadzone = 30

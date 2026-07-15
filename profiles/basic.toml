@@ -19,6 +19,20 @@ G10 = "ctrl+a"
 G11 = "ctrl+f"
 G12 = "ctrl+w"
 
+[labels]
+G1  = "Copy"
+G2  = "Paste"
+G3  = "Undo"
+G4  = "Redo"
+G5  = "Refresh"
+G6  = "Switch Window"
+G7  = "Show Desktop"
+G8  = "Cut"
+G9  = "Save"
+G10 = "Select All"
+G11 = "Find"
+G12 = "Close"
+
 [joystick]
 mode = "wasd"      # "wasd" (implemented) | "mouse" (parsed, not yet implemented)
 deadzone = 30      # 0-127; distance from center (127) before a key fires
