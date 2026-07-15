@@ -9,6 +9,7 @@ pub struct ProfileEntry {
     pub display_name: String,
     pub source: ProfileSource,
     pub modified: bool,
+    pub origin: Option<String>,
 }
 
 /// Turn a display name into a filesystem-safe stem (no extension).
@@ -47,17 +48,18 @@ pub fn unique_filename(dir: &Path, display_name: &str) -> String {
     candidate
 }
 
-/// Lenient read of `[meta]` (name, source, modified) from a profile file.
-fn read_entry_meta(path: &Path) -> (Option<String>, ProfileSource, bool) {
-    let Ok(text) = std::fs::read_to_string(path) else { return (None, ProfileSource::User, false) };
-    let Ok(raw) = toml::from_str::<RawConfig>(&text) else { return (None, ProfileSource::User, false) };
+/// Lenient read of `[meta]` (name, source, modified, origin) from a profile file.
+fn read_entry_meta(path: &Path) -> (Option<String>, ProfileSource, bool, Option<String>) {
+    let Ok(text) = std::fs::read_to_string(path) else { return (None, ProfileSource::User, false, None) };
+    let Ok(raw) = toml::from_str::<RawConfig>(&text) else { return (None, ProfileSource::User, false, None) };
     match raw.meta {
         Some(m) => (
             m.name.map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
             m.source.as_deref().map(ProfileSource::parse).unwrap_or_default(),
             m.modified.unwrap_or(false),
+            m.origin.map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
         ),
-        None => (None, ProfileSource::User, false),
+        None => (None, ProfileSource::User, false, None),
     }
 }
 
@@ -70,9 +72,9 @@ pub fn list(dir: &Path) -> Vec<ProfileEntry> {
             let Some(fname) = path.file_name().and_then(|s| s.to_str()) else { continue };
             if !fname.ends_with(".toml") { continue; }
             let stem = fname.trim_end_matches(".toml").to_string();
-            let (name, source, modified) = read_entry_meta(&path);
+            let (name, source, modified, origin) = read_entry_meta(&path);
             let display_name = name.unwrap_or(stem);
-            entries.push(ProfileEntry { filename: fname.to_string(), display_name, source, modified });
+            entries.push(ProfileEntry { filename: fname.to_string(), display_name, source, modified, origin });
         }
     }
     entries.sort_by(|a, b| a.display_name.to_lowercase().cmp(&b.display_name.to_lowercase()));
@@ -96,6 +98,7 @@ pub fn duplicate(dir: &Path, src_filename: &str, new_display_name: &str) -> Resu
     profile.set_meta_name(Some(new_display_name.to_string()));
     profile.set_source(ProfileSource::User);
     profile.set_modified(false);
+    profile.set_origin(None);
     let filename = unique_filename(dir, new_display_name);
     std::fs::write(dir.join(&filename), profile.to_toml()?)
         .with_context(|| format!("failed to write {filename}"))?;
@@ -335,6 +338,30 @@ mod tests {
         assert_eq!(a.source, crate::config::ProfileSource::Github);
         assert!(!a.modified);
         assert_eq!(b.source, crate::config::ProfileSource::User);
+    }
+
+    #[test]
+    fn duplicate_clears_origin() {
+        let d = tmp("cat-dup-origin");
+        std::fs::write(d.join("src.toml"),
+            "[meta]\nname = \"S\"\nsource = \"github\"\norigin = \"s.toml\"\nmodified = true\n[keys]\nG1 = \"a\"\n").unwrap();
+        let f = duplicate(&d, "src.toml", "Copy").unwrap();
+        let p = crate::config::Profile::load(&d.join(&f)).unwrap();
+        assert_eq!(p.origin(), None);
+        assert_eq!(p.source(), crate::config::ProfileSource::User);
+    }
+
+    #[test]
+    fn list_surfaces_origin() {
+        let d = tmp("cat-list-origin");
+        std::fs::write(d.join("g.toml"),
+            "[meta]\nname = \"G\"\nsource = \"github\"\norigin = \"gaming.toml\"\n[keys]\n").unwrap();
+        std::fs::write(d.join("u.toml"), "[keys]\nG1 = \"a\"\n").unwrap();
+        let entries = list(&d);
+        let g = entries.iter().find(|e| e.filename == "g.toml").unwrap();
+        let u = entries.iter().find(|e| e.filename == "u.toml").unwrap();
+        assert_eq!(g.origin.as_deref(), Some("gaming.toml"));
+        assert_eq!(u.origin, None);
     }
 
     #[test]
