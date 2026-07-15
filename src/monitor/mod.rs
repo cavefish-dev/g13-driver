@@ -608,6 +608,18 @@ impl MonitorApp {
             ui.vertical(|ui| {
                 ui.set_width(BLOCK_W);
 
+                // M-keys indicator row (read-only), pinned above the key grid.
+                ui.horizontal(|ui| {
+                    ui.label("M-keys:");
+                    let hot = egui::Color32::from_rgb(127, 224, 160);
+                    let dim = egui::Color32::from_gray(140);
+                    for (m, label) in [(MKey::M1, "M1"), (MKey::M2, "M2"), (MKey::M3, "M3"), (MKey::MR, "MR")] {
+                        let on = snapshot.mkeys.contains(&m);
+                        ui.colored_label(if on { hot } else { dim }, label);
+                    }
+                });
+                ui.add_space(6.0);
+
                 for row in ROWS {
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = 0.0;
@@ -633,9 +645,28 @@ impl MonitorApp {
                 ui.separator();
                 ui.add_space(6.0);
 
-                // Joystick, centered under the grid.
+                // Thumb cells (left) + joystick (right), centered under the grid.
                 ui.horizontal(|ui| {
-                    ui.add_space((BLOCK_W - 140.0) * 0.5);
+                    ui.add_space((BLOCK_W - 140.0 - 70.0) * 0.5); // rough centering for thumb col + joystick
+                    // Thumb column (left) — same cell frame as the G-key grid.
+                    ui.vertical(|ui| {
+                        for &key in &[G13Key::Btn1, G13Key::Btn2, G13Key::Stick] {
+                            let pressed = snapshot.pressed.contains(&key);
+                            let binding = cfg.and_then(|c| c.get_binding(key)).unwrap_or("—");
+                            let label = cfg.and_then(|c| c.label(key)).unwrap_or("");
+                            let fill = if pressed { egui::Color32::from_rgb(20, 54, 31) } else { egui::Color32::from_gray(38) };
+                            egui::Frame::new().fill(fill).inner_margin(4.0).outer_margin(3.0).corner_radius(4.0).show(ui, |ui| {
+                                ui.set_width(48.0);
+                                ui.vertical(|ui| {
+                                    ui.strong(format!("{key:?}"));
+                                    ui.add(egui::Label::new(egui::RichText::new(binding).small()).truncate());
+                                    ui.add(egui::Label::new(egui::RichText::new(label).small().weak()).truncate());
+                                });
+                            });
+                        }
+                    });
+                    ui.add_space(10.0);
+                    // Joystick panel (right).
                     ui.vertical(|ui| {
                         ui.label("JOYSTICK");
                         let joy = cfg.and_then(|c| c.joystick());
@@ -676,26 +707,6 @@ impl MonitorApp {
                             show(ui, "→", &right, a_right);
                         });
                     });
-                });
-
-                ui.add_space(8.0);
-                ui.horizontal(|ui| {
-                    ui.label("M-keys:");
-                    let hot = egui::Color32::from_rgb(127, 224, 160);
-                    let dim = egui::Color32::from_gray(140);
-                    for (m, label) in [(MKey::M1, "M1"), (MKey::M2, "M2"), (MKey::M3, "M3"), (MKey::MR, "MR")] {
-                        let on = snapshot.mkeys.contains(&m);
-                        ui.colored_label(if on { hot } else { dim }, label);
-                    }
-                });
-                ui.horizontal(|ui| {
-                    ui.label("Thumb:");
-                    let hot = egui::Color32::from_rgb(127, 224, 160);
-                    let dim = egui::Color32::from_gray(140);
-                    for (key, label) in [(G13Key::Btn1, "BTN1"), (G13Key::Btn2, "BTN2"), (G13Key::Stick, "STICK")] {
-                        let on = snapshot.pressed.contains(&key);
-                        ui.colored_label(if on { hot } else { dim }, label);
-                    }
                 });
             });
         });
