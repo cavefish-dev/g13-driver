@@ -1329,6 +1329,46 @@ impl MonitorApp {
             }
         }
         ui.weak("Distance the stick must move from center before a direction fires (applies to all profiles).");
+
+        ui.add_space(8.0);
+        ui.separator();
+        ui.label("Backlight");
+        let cfg = self.profiles.read().unwrap().backlight_config();
+
+        // Default color (used by any profile without its own color).
+        let mut changed = false;
+        let mut rgb = [cfg.default_color.0, cfg.default_color.1, cfg.default_color.2];
+        ui.horizontal(|ui| {
+            ui.label("Default color");
+            if egui::color_picker::color_edit_button_srgb(ui, &mut rgb).changed() {
+                changed = true;
+            }
+        });
+        if changed {
+            self.profiles.write().unwrap()
+                .set_backlight_default_color(crate::led::Color(rgb[0], rgb[1], rgb[2]));
+        }
+
+        // Brightness 0-100%.
+        let mut pct = (cfg.brightness * 100.0).round() as u32;
+        if ui.add(egui::Slider::new(&mut pct, 0..=100).text("Brightness %")).changed() {
+            self.profiles.write().unwrap().set_backlight_brightness(pct as f32 / 100.0);
+            changed = true;
+        }
+
+        // M-key indicator toggle.
+        let mut ind = cfg.mkey_indicator;
+        if ui.checkbox(&mut ind, "Light active profile's M-key").changed() {
+            self.profiles.write().unwrap().set_backlight_mkey_indicator(ind);
+            changed = true;
+        }
+
+        if changed {
+            if let Err(e) = self.profiles.read().unwrap().persist_backlight() {
+                log::warn!("persist backlight failed: {e:#}");
+            }
+        }
+        ui.weak("Applies to the whole keypad; brightness 0 turns the backlight off.");
     }
 }
 
