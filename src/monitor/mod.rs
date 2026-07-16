@@ -345,18 +345,20 @@ impl MonitorApp {
         let desired = std::sync::Arc::new(std::sync::Mutex::new(
             self.profiles.read().unwrap().desired_led_state()));
         crate::led::spawn_poller(self.profiles.clone(), desired.clone());
+        let lcd_frame = std::sync::Arc::new(std::sync::Mutex::new([0u8; 992]));
 
         // Supervisor: owns connection state and reconnects automatically.
         {
             let state = self.state.clone();
             let ctx = ctx.clone();
             let desired_sup = desired.clone();
+            let lcd_sup = lcd_frame.clone();
             std::thread::spawn(move || loop {
                 match crate::usb::UsbReader::open() {
                     Ok(reader) => {
                         { state.lock().unwrap().connection = Connection::Connected; }
                         ctx.request_repaint();
-                        let _ = reader.run(tx.clone(), desired_sup.clone()); // blocks until disconnect
+                        let _ = reader.run(tx.clone(), desired_sup.clone(), lcd_sup.clone()); // blocks until disconnect
                         {
                             state.lock().unwrap().connection =
                                 Connection::Disconnected("device disconnected".to_string());

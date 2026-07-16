@@ -43,12 +43,14 @@ pub fn run_headless(config: Arc<RwLock<ProfileSet>>) -> Result<()> {
     let (tx, rx) = mpsc::channel::<G13Event>();
     let desired = Arc::new(Mutex::new(config.read().unwrap().desired_led_state()));
     crate::led::spawn_poller(config.clone(), desired.clone());
+    let lcd_frame = Arc::new(Mutex::new([0u8; 992]));
     let desired_sup = desired.clone();
+    let lcd_sup = lcd_frame.clone();
     thread::spawn(move || loop {
         match usb::UsbReader::open() {
             Ok(reader) => {
                 log::info!("G13 connected");
-                let _ = reader.run(tx.clone(), desired_sup.clone());
+                let _ = reader.run(tx.clone(), desired_sup.clone(), lcd_sup.clone());
                 log::warn!("G13 disconnected — retrying");
             }
             Err(e) => log::warn!("G13 open failed: {e:#}"),

@@ -16,6 +16,8 @@ const LED_REQUEST: u8 = 0x09;
 const LED_COLOR_VALUE: u16 = 0x0307;
 const LED_MKEY_VALUE: u16 = 0x0305;
 const LED_TIMEOUT: Duration = Duration::from_millis(100);
+const LCD_ENDPOINT_OUT: u8 = 0x02;
+const LCD_INIT_TIMEOUT: Duration = Duration::from_millis(1000);
 
 pub struct UsbReader {
     handle: DeviceHandle<GlobalContext>,
@@ -30,14 +32,22 @@ impl UsbReader {
         Ok(Self { handle })
     }
 
-    pub fn run(mut self, tx: Sender<G13Event>, desired: Arc<Mutex<LedState>>) -> Result<()> {
+    pub fn run(
+        mut self,
+        tx: Sender<G13Event>,
+        desired: Arc<Mutex<LedState>>,
+        lcd_frame: Arc<Mutex<[u8; 992]>>,
+    ) -> Result<()> {
         let mut parser = ReportParser::new();
         let mut buf = [0u8; 8];
         // None so the first tick always applies the current desired state (also
         // re-applies after a reconnect, since `run` is called fresh each time).
         let mut last_applied: Option<LedState> = None;
+        let mut last_lcd: Option<[u8; 992]> = None;
+        self.init_lcd(); // best-effort, once per connection
         loop {
             self.apply_leds(&desired, &mut last_applied);
+            self.apply_lcd(&lcd_frame, &mut last_lcd);
             match self.handle.read_interrupt(ENDPOINT_IN, &mut buf, READ_TIMEOUT) {
                 Ok(8) => {
                     log::trace!("raw report: {buf:02X?}");
@@ -53,6 +63,26 @@ impl UsbReader {
                     return Err(anyhow::Error::from(e).context("USB read error"));
                 }
             }
+        }
+    }
+
+    /// Best-effort LCD init (SET_CONFIGURATION-style control transfer per g13d).
+    /// Warn-and-continue: if WinUSB rejects it we still try to write frames.
+    fn init_lcd(&self) {
+        if let Err(e) = self.handle.write_control(0x00, 0x09, 0x0001, 0x0000, &[], LCD_INIT_TIMEOUT) {
+            log::warn!("LCD init transfer failed (continuing): {e}");
+        }
+    }
+
+    /// Push the desired 992-byte LCD frame when it changed. Warn-and-continue.
+    fn apply_lcd(&self, frame_cell: &Arc<Mutex<[u8; 992]>>, last: &mut Option<[u8; 992]>) {
+        let want = *frame_cell.lock().unwrap();
+        if *last == Some(want) {
+            return;
+        }
+        match self.handle.write_interrupt(LCD_ENDPOINT_OUT, &want, LED_TIMEOUT) {
+            Ok(_) => *last = Some(want),
+            Err(e) => log::warn!("LCD frame write failed: {e}"),
         }
     }
 
