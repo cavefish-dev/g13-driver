@@ -291,6 +291,22 @@ struct RawApp {
 }
 
 #[derive(Debug, Deserialize)]
+struct RawBacklight {
+    #[serde(default)]
+    default_color: Option<String>,
+    #[serde(default)]
+    brightness: Option<f32>,
+    #[serde(default)]
+    mkey_indicator: Option<bool>,
+    #[serde(default)]
+    m1_color: Option<String>,
+    #[serde(default)]
+    m2_color: Option<String>,
+    #[serde(default)]
+    m3_color: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 struct RawManifest {
     profiles_dir: Option<String>,
     m1: Option<String>,
@@ -302,6 +318,8 @@ struct RawManifest {
     app: Option<RawApp>,
     #[serde(default)]
     joystick: Option<RawManifestJoystick>,
+    #[serde(default)]
+    backlight: Option<RawBacklight>,
 }
 
 /// The loaded profiles plus which M-key is active. Replaces a bare `Profile`
@@ -322,6 +340,7 @@ pub struct ProfileSet {
     joystick_deadzone: u8,
     config_path: PathBuf,
     start_active: bool,
+    backlight: crate::led::BacklightConfig,
 }
 
 impl ProfileSet {
@@ -338,6 +357,17 @@ impl ProfileSet {
         let autorepeat = raw.autorepeat.map(AutoRepeat::from_raw).unwrap_or_default();
         let start_active = raw.app.as_ref().map(|a| a.start_active).unwrap_or(false);
         let joystick_deadzone = raw.joystick.map(|j| j.deadzone.min(127) as u8).unwrap_or(50);
+        let backlight = raw.backlight.map(|b| {
+            use crate::led::{BacklightConfig, Color};
+            let d = BacklightConfig::default();
+            let parse = |s: Option<String>| s.and_then(|v| Color::from_hex(&v));
+            BacklightConfig {
+                default_color: parse(b.default_color).unwrap_or(d.default_color),
+                brightness: b.brightness.unwrap_or(d.brightness).clamp(0.0, 1.0),
+                mkey_indicator: b.mkey_indicator.unwrap_or(d.mkey_indicator),
+                slot_colors: [parse(b.m1_color), parse(b.m2_color), parse(b.m3_color)],
+            }
+        }).unwrap_or_default();
 
         // Manifest mode when ANY of profiles_dir/m1/m2/m3 is present.
         let is_manifest = raw.profiles_dir.is_some() || raw.m1.is_some()
@@ -367,6 +397,7 @@ impl ProfileSet {
                 joystick_deadzone,
                 config_path: config_path.to_path_buf(),
                 start_active,
+                backlight,
             })
         } else {
             // Legacy: the file itself is a single M1 profile.
@@ -381,6 +412,7 @@ impl ProfileSet {
                 joystick_deadzone,
                 config_path: config_path.to_path_buf(),
                 start_active,
+                backlight,
             })
         }
     }
@@ -393,6 +425,13 @@ impl ProfileSet {
 
     pub fn set_joystick_deadzone(&mut self, deadzone: u8) {
         self.joystick_deadzone = deadzone.min(127);
+    }
+
+    pub fn backlight_config(&self) -> crate::led::BacklightConfig { self.backlight }
+
+    /// The LED state the hardware should show for the current active slot + config.
+    pub fn desired_led_state(&self) -> crate::led::LedState {
+        crate::led::resolve(self.active, &self.backlight)
     }
 
     pub fn start_active(&self) -> bool { self.start_active }
@@ -886,6 +925,42 @@ mod profileset_tests {
         assert_eq!(reloaded.joystick_deadzone(), 42);
         let text = std::fs::read_to_string(d.join("config.toml")).unwrap();
         assert!(text.contains("# manifest"), "comment preserved");
+    }
+
+    #[test]
+    fn parses_backlight_section() {
+        let d = std::env::temp_dir().join("g13-cfg-backlight");
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("profiles")).unwrap();
+        std::fs::write(d.join("profiles/basic.toml"), "[keys]\nG1 = \"a\"\n").unwrap();
+        std::fs::write(d.join("config.toml"),
+            "profiles_dir = \"profiles\"\nm1 = \"basic.toml\"\n\
+             [backlight]\ndefault_color = \"#102030\"\nbrightness = 0.5\n\
+             mkey_indicator = false\nm1_color = \"#FF0000\"\n").unwrap();
+
+        let set = ProfileSet::load(&d.join("config.toml")).unwrap();
+        let b = set.backlight_config();
+        assert_eq!(b.default_color, crate::led::Color(0x10, 0x20, 0x30));
+        assert_eq!(b.brightness, 0.5);
+        assert!(!b.mkey_indicator);
+        assert_eq!(b.slot_colors[0], Some(crate::led::Color(0xFF, 0x00, 0x00)));
+        assert_eq!(b.slot_colors[1], None);
+    }
+
+    #[test]
+    fn missing_backlight_section_uses_defaults() {
+        let d = std::env::temp_dir().join("g13-cfg-nobacklight");
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("profiles")).unwrap();
+        std::fs::write(d.join("profiles/basic.toml"), "[keys]\nG1 = \"a\"\n").unwrap();
+        std::fs::write(d.join("config.toml"),
+            "profiles_dir = \"profiles\"\nm1 = \"basic.toml\"\n").unwrap();
+
+        let set = ProfileSet::load(&d.join("config.toml")).unwrap();
+        assert_eq!(set.backlight_config(), crate::led::BacklightConfig::default());
+        // active is M1 by default, default color white, indicator on -> mkeys = 1
+        assert_eq!(set.desired_led_state(),
+            crate::led::LedState { rgb: (255, 255, 255), mkeys: 1 });
     }
 
     #[test]
