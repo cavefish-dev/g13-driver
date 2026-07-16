@@ -20,3 +20,12 @@ deadzone = 50
 # App state (managed by the GUI; safe to edit while stopped).
 # [app]
 # start_active = false   # resume Active (true) or Dry-run (false) on next launch
+
+# Keypad backlight (whole-pad single color; per-M-profile). Managed by the GUI
+# (Settings + Profiles tabs); safe to edit by hand while stopped.
+# [backlight]
+# default_color  = "#FFFFFF"   # fallback for a profile with no color of its own
+# brightness     = 1.0         # global 0.0-1.0 (0 = off)
+# mkey_indicator = true        # light the active profile's M-key LED
+# m1_color       = "#FF0000"   # optional per-slot overrides
+# m2_color       = "#3030FF"
