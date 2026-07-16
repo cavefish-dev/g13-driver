@@ -427,6 +427,21 @@ impl ProfileSet {
         self.joystick_deadzone = deadzone.min(127);
     }
 
+    pub fn set_backlight_default_color(&mut self, c: crate::led::Color) {
+        self.backlight.default_color = c;
+    }
+    pub fn set_backlight_brightness(&mut self, b: f32) {
+        self.backlight.brightness = b.clamp(0.0, 1.0);
+    }
+    pub fn set_backlight_mkey_indicator(&mut self, on: bool) {
+        self.backlight.mkey_indicator = on;
+    }
+    pub fn set_backlight_slot_color(&mut self, slot: usize, c: Option<crate::led::Color>) {
+        if slot < 3 {
+            self.backlight.slot_colors[slot] = c;
+        }
+    }
+
     pub fn backlight_config(&self) -> crate::led::BacklightConfig { self.backlight }
 
     /// The LED state the hardware should show for the current active slot + config.
@@ -484,6 +499,36 @@ impl ProfileSet {
             doc.as_table_mut().insert("joystick", Item::Table(Table::new()));
         }
         doc["joystick"]["deadzone"] = toml_value(deadzone.min(127) as i64);
+        std::fs::write(&self.config_path, doc.to_string())
+            .with_context(|| format!("failed to write {}", self.config_path.display()))?;
+        Ok(())
+    }
+
+    /// Write the whole `[backlight]` table into the manifest, preserving every other
+    /// key and comment (format-preserving via toml_edit). Best-effort; callers log on error.
+    pub fn persist_backlight(&self) -> Result<()> {
+        use toml_edit::{DocumentMut, Item, Table, value as toml_value};
+        let text = std::fs::read_to_string(&self.config_path)
+            .with_context(|| format!("failed to read {}", self.config_path.display()))?;
+        let mut doc = text.parse::<DocumentMut>()
+            .with_context(|| format!("failed to parse {}", self.config_path.display()))?;
+        if !doc.as_table().contains_key("backlight") {
+            doc.as_table_mut().insert("backlight", Item::Table(Table::new()));
+        }
+        let b = &self.backlight;
+        doc["backlight"]["default_color"] = toml_value(b.default_color.to_hex());
+        doc["backlight"]["brightness"] = toml_value(b.brightness as f64);
+        doc["backlight"]["mkey_indicator"] = toml_value(b.mkey_indicator);
+        for (i, key) in ["m1_color", "m2_color", "m3_color"].iter().enumerate() {
+            match b.slot_colors[i] {
+                Some(c) => { doc["backlight"][*key] = toml_value(c.to_hex()); }
+                None => {
+                    if let Some(t) = doc["backlight"].as_table_mut() {
+                        t.remove(*key);
+                    }
+                }
+            }
+        }
         std::fs::write(&self.config_path, doc.to_string())
             .with_context(|| format!("failed to write {}", self.config_path.display()))?;
         Ok(())
@@ -979,6 +1024,38 @@ mod profileset_tests {
         assert!(text.contains("# my manifest"));
         assert!(text.contains("m2 = \"game.toml\""));
         assert!(text.contains("profiles_dir = \"profiles\""));
+    }
+
+    #[test]
+    fn persist_backlight_round_trips() {
+        use crate::led::Color;
+        let d = std::env::temp_dir().join("g13-cfg-persistbl");
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("profiles")).unwrap();
+        std::fs::write(d.join("profiles/basic.toml"), "[keys]\nG1 = \"a\"\n").unwrap();
+        std::fs::write(d.join("config.toml"),
+            "profiles_dir = \"profiles\"\nm1 = \"basic.toml\"\n").unwrap();
+
+        let mut set = ProfileSet::load(&d.join("config.toml")).unwrap();
+        set.set_backlight_default_color(Color(0x11, 0x22, 0x33));
+        set.set_backlight_brightness(0.25);
+        set.set_backlight_mkey_indicator(false);
+        set.set_backlight_slot_color(0, Some(Color(0xAA, 0xBB, 0xCC)));
+        set.set_backlight_slot_color(1, None);
+        set.persist_backlight().unwrap();
+
+        // Reload from disk and confirm the values survived.
+        let reloaded = ProfileSet::load(&d.join("config.toml")).unwrap();
+        let b = reloaded.backlight_config();
+        assert_eq!(b.default_color, Color(0x11, 0x22, 0x33));
+        assert_eq!(b.brightness, 0.25);
+        assert!(!b.mkey_indicator);
+        assert_eq!(b.slot_colors[0], Some(Color(0xAA, 0xBB, 0xCC)));
+        assert_eq!(b.slot_colors[1], None);
+
+        // Original manifest keys are preserved.
+        let text = std::fs::read_to_string(d.join("config.toml")).unwrap();
+        assert!(text.contains("m1 = \"basic.toml\""));
     }
 }
 
