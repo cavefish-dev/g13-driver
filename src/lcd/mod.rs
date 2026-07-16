@@ -2,7 +2,10 @@ mod font;
 
 use crate::config::ProfileSet;
 use crate::protocol::{G13Event, MKey};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
+use std::thread;
+use std::time::Duration;
 
 pub const LCD_W: usize = 160;
 pub const LCD_H: usize = 43;
@@ -198,6 +201,30 @@ pub fn render(model: &LcdModel) -> Framebuffer {
     }
 
     fb
+}
+
+/// Rebuild the LCD frame from live state every ~150 ms and publish it. `dry_run`
+/// drives Active/Dry-run; headless passes an always-false flag.
+pub fn spawn_poller(
+    profiles: Arc<RwLock<ProfileSet>>,
+    dry_run: Arc<AtomicBool>,
+    last: Arc<Mutex<Option<LastAction>>>,
+    frame: Arc<Mutex<[u8; 992]>>,
+) {
+    thread::spawn(move || loop {
+        let model = {
+            let set = profiles.read().unwrap();
+            LcdModel {
+                mode: if dry_run.load(Ordering::Relaxed) { Mode::DryRun } else { Mode::Active },
+                slot: set.active(),
+                profile_name: set.active_name().map(str::to_string),
+                last: last.lock().unwrap().clone(),
+            }
+        };
+        let packed = render(&model).pack();
+        *frame.lock().unwrap() = packed;
+        thread::sleep(Duration::from_millis(150));
+    });
 }
 
 #[cfg(test)]

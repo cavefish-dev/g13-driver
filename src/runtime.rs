@@ -44,6 +44,9 @@ pub fn run_headless(config: Arc<RwLock<ProfileSet>>) -> Result<()> {
     let desired = Arc::new(Mutex::new(config.read().unwrap().desired_led_state()));
     crate::led::spawn_poller(config.clone(), desired.clone());
     let lcd_frame = Arc::new(Mutex::new([0u8; 992]));
+    let last_action = Arc::new(Mutex::new(None));
+    let lcd_mode = Arc::new(std::sync::atomic::AtomicBool::new(false)); // headless = always Active
+    crate::lcd::spawn_poller(config.clone(), lcd_mode, last_action.clone(), lcd_frame.clone());
     let desired_sup = desired.clone();
     let lcd_sup = lcd_frame.clone();
     thread::spawn(move || loop {
@@ -63,6 +66,7 @@ pub fn run_headless(config: Arc<RwLock<ProfileSet>>) -> Result<()> {
     loop {
         match rx.recv_timeout(Duration::from_millis(15)) {
             Ok(event) => {
+                crate::lcd::capture(&event, &config, &last_action);
                 if let Err(e) = dispatcher.handle(event) {
                     log::warn!("dispatch error: {e:#}");
                 }

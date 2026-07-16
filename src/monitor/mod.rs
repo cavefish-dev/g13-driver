@@ -201,6 +201,7 @@ pub struct MonitorApp {
     catalog_state: std::sync::Arc<std::sync::Mutex<crate::catalog::CatalogState>>,
     catalog_status: std::sync::Arc<std::sync::Mutex<Option<String>>>,
     pending_revert: Option<(std::path::PathBuf, String)>,
+    last_action: Arc<Mutex<Option<crate::lcd::LastAction>>>,
 }
 
 impl MonitorApp {
@@ -242,6 +243,7 @@ impl MonitorApp {
             catalog_state: std::sync::Arc::new(std::sync::Mutex::new(crate::catalog::CatalogState::Idle)),
             catalog_status: std::sync::Arc::new(std::sync::Mutex::new(None)),
             pending_revert: None,
+            last_action: Arc::new(Mutex::new(None)),
         };
 
         // Windows: build the tray from the current state and start the
@@ -346,6 +348,12 @@ impl MonitorApp {
             self.profiles.read().unwrap().desired_led_state()));
         crate::led::spawn_poller(self.profiles.clone(), desired.clone());
         let lcd_frame = std::sync::Arc::new(std::sync::Mutex::new([0u8; 992]));
+        crate::lcd::spawn_poller(
+            self.profiles.clone(),
+            self.dry_run.clone(),
+            self.last_action.clone(),
+            lcd_frame.clone(),
+        );
 
         // Supervisor: owns connection state and reconnects automatically.
         {
@@ -378,7 +386,9 @@ impl MonitorApp {
         let dispatcher = Dispatcher::new(self.profiles.clone(), injector);
         let state = self.state.clone();
         let dry_run = self.dry_run.clone();
-        std::thread::spawn(move || consumer_loop(rx, dispatcher, state, dry_run, ctx));
+        let profiles = self.profiles.clone();
+        let last_action = self.last_action.clone();
+        std::thread::spawn(move || consumer_loop(rx, dispatcher, state, dry_run, ctx, profiles, last_action));
     }
 }
 
@@ -395,12 +405,15 @@ fn consumer_loop(
     state: Arc<Mutex<DeviceState>>,
     dry_run: Arc<AtomicBool>,
     ctx: egui::Context,
+    profiles: Arc<RwLock<crate::config::ProfileSet>>,
+    last_action: Arc<Mutex<Option<crate::lcd::LastAction>>>,
 ) {
     let mut was_active = !dry_run.load(Ordering::Relaxed);
     loop {
         match rx.recv_timeout(Duration::from_millis(15)) {
             Ok(event) => {
                 state.lock().unwrap().apply(&event);
+                crate::lcd::capture(&event, &profiles, &last_action);
                 let active = !dry_run.load(Ordering::Relaxed);
                 if was_active && !active {
                     dispatcher.release_held();
