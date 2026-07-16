@@ -10,6 +10,7 @@ mod device_state;
 mod dispatcher;
 mod injector;
 mod joystick;
+mod lcd;
 mod led;
 mod monitor;
 mod profiles;
