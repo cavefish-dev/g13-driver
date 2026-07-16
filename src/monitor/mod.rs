@@ -342,17 +342,20 @@ impl MonitorApp {
     /// disconnect/reconnect cycle does not tear down the consumer.
     fn start_consumer(&self, ctx: egui::Context) {
         let (tx, rx) = std::sync::mpsc::channel();
+        let desired = std::sync::Arc::new(std::sync::Mutex::new(
+            self.profiles.read().unwrap().desired_led_state()));
 
         // Supervisor: owns connection state and reconnects automatically.
         {
             let state = self.state.clone();
             let ctx = ctx.clone();
+            let desired_sup = desired.clone();
             std::thread::spawn(move || loop {
                 match crate::usb::UsbReader::open() {
                     Ok(reader) => {
                         { state.lock().unwrap().connection = Connection::Connected; }
                         ctx.request_repaint();
-                        let _ = reader.run(tx.clone()); // blocks until disconnect
+                        let _ = reader.run(tx.clone(), desired_sup.clone()); // blocks until disconnect
                         {
                             state.lock().unwrap().connection =
                                 Connection::Disconnected("device disconnected".to_string());

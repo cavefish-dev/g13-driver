@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, RecvTimeoutError};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
 use anyhow::Result;
@@ -41,11 +41,13 @@ pub fn run_headless(config: Arc<RwLock<ProfileSet>>) -> Result<()> {
     // loop's channel never closes in normal operation. Reopens the G13 after a
     // disconnect or a failed open, retrying every 2s.
     let (tx, rx) = mpsc::channel::<G13Event>();
+    let desired = Arc::new(Mutex::new(config.read().unwrap().desired_led_state()));
+    let desired_sup = desired.clone();
     thread::spawn(move || loop {
         match usb::UsbReader::open() {
             Ok(reader) => {
                 log::info!("G13 connected");
-                let _ = reader.run(tx.clone());
+                let _ = reader.run(tx.clone(), desired_sup.clone());
                 log::warn!("G13 disconnected — retrying");
             }
             Err(e) => log::warn!("G13 open failed: {e:#}"),
