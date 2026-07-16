@@ -1,3 +1,8 @@
+use std::sync::{Arc, Mutex, RwLock};
+use std::thread;
+use std::time::Duration;
+
+use crate::config::ProfileSet;
 use crate::protocol::MKey;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -85,6 +90,17 @@ pub fn color_packet(rgb: (u8, u8, u8)) -> [u8; 5] {
 /// 5-byte SET_REPORT payload for the M-key indicator LEDs (wValue 0x0305).
 pub fn mkey_packet(mask: u8) -> [u8; 5] {
     [0x05, mask, 0x00, 0x00, 0x00]
+}
+
+/// Poll the active profile + backlight config every ~150 ms and publish the
+/// resolved LedState into the shared cell the USB reader consumes. Every change
+/// source (device M-key, GUI edit, hot-reload) reconciles through this one loop.
+pub fn spawn_poller(config: Arc<RwLock<ProfileSet>>, desired: Arc<Mutex<LedState>>) {
+    thread::spawn(move || loop {
+        let state = config.read().unwrap().desired_led_state();
+        *desired.lock().unwrap() = state;
+        thread::sleep(Duration::from_millis(150));
+    });
 }
 
 #[cfg(test)]

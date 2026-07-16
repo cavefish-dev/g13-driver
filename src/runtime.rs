@@ -42,6 +42,7 @@ pub fn run_headless(config: Arc<RwLock<ProfileSet>>) -> Result<()> {
     // disconnect or a failed open, retrying every 2s.
     let (tx, rx) = mpsc::channel::<G13Event>();
     let desired = Arc::new(Mutex::new(config.read().unwrap().desired_led_state()));
+    crate::led::spawn_poller(config.clone(), desired.clone());
     let desired_sup = desired.clone();
     thread::spawn(move || loop {
         match usb::UsbReader::open() {

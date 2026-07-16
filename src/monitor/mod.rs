@@ -344,6 +344,7 @@ impl MonitorApp {
         let (tx, rx) = std::sync::mpsc::channel();
         let desired = std::sync::Arc::new(std::sync::Mutex::new(
             self.profiles.read().unwrap().desired_led_state()));
+        crate::led::spawn_poller(self.profiles.clone(), desired.clone());
 
         // Supervisor: owns connection state and reconnects automatically.
         {
