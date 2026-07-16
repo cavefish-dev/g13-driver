@@ -15,7 +15,7 @@ m2 = "media.toml"
 
 # Global joystick deadzone (0–127; distance from center before a direction fires).
 [joystick]
-deadzone = 30
+deadzone = 50
 
 # App state (managed by the GUI; safe to edit while stopped).
 # [app]

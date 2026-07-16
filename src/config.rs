@@ -62,7 +62,7 @@ struct RawManifestJoystick {
     #[serde(default = "default_global_deadzone")]
     deadzone: u16,
 }
-fn default_global_deadzone() -> u16 { 30 }
+fn default_global_deadzone() -> u16 { 50 }
 
 /// Global auto-repeat timing (from the manifest `[autorepeat]`; defaults when absent).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -337,7 +337,7 @@ impl ProfileSet {
         let base = config_path.parent().unwrap_or_else(|| Path::new("."));
         let autorepeat = raw.autorepeat.map(AutoRepeat::from_raw).unwrap_or_default();
         let start_active = raw.app.as_ref().map(|a| a.start_active).unwrap_or(false);
-        let joystick_deadzone = raw.joystick.map(|j| j.deadzone.min(127) as u8).unwrap_or(30);
+        let joystick_deadzone = raw.joystick.map(|j| j.deadzone.min(127) as u8).unwrap_or(50);
 
         // Manifest mode when ANY of profiles_dir/m1/m2/m3 is present.
         let is_manifest = raw.profiles_dir.is_some() || raw.m1.is_some()
@@ -858,11 +858,11 @@ mod profileset_tests {
     }
 
     #[test]
-    fn global_deadzone_defaults_to_30() {
+    fn global_deadzone_defaults_to_50() {
         let d = tmp("gdz-default");
         write(&d, "config.toml", "[keys]\nG1 = \"a\"\n");
         let set = ProfileSet::load(&d.join("config.toml")).unwrap();
-        assert_eq!(set.joystick_deadzone(), 30);
+        assert_eq!(set.joystick_deadzone(), 50);
     }
 
     #[test]
