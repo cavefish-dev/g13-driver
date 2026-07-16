@@ -1,3 +1,5 @@
+mod font;
+
 pub const LCD_W: usize = 160;
 pub const LCD_H: usize = 43;
 
@@ -54,6 +56,39 @@ impl Framebuffer {
         }
         frame
     }
+
+    /// Draw a 5-column glyph at (x,y); each set bit becomes a `scale`×`scale` block.
+    pub fn draw_glyph(&mut self, x: i32, y: i32, glyph: &[u8; 5], scale: i32) {
+        for (col, bits) in glyph.iter().enumerate() {
+            for row in 0..8 {
+                if bits & (1 << row) != 0 {
+                    self.fill_rect(
+                        x + col as i32 * scale,
+                        y + row * scale,
+                        scale, scale, true,
+                    );
+                }
+            }
+        }
+    }
+
+    pub fn draw_char(&mut self, x: i32, y: i32, ch: char, scale: i32) {
+        self.draw_glyph(x, y, font::glyph(ch), scale);
+    }
+
+    /// Draw a string left-to-right; each cell is 6px wide (5 glyph + 1 gap) × scale.
+    pub fn draw_text(&mut self, x: i32, y: i32, text: &str, scale: i32) {
+        let mut cx = x;
+        for ch in text.chars() {
+            self.draw_char(cx, y, ch, scale);
+            cx += 6 * scale;
+        }
+    }
+}
+
+/// Pixel width a string occupies: 6px (5 glyph + 1 gap) per char × scale.
+pub fn text_width(text: &str, scale: i32) -> i32 {
+    text.chars().count() as i32 * 6 * scale
 }
 
 impl Default for Framebuffer {
@@ -110,5 +145,42 @@ mod tests {
         fb.fill_rect(0, 0, 2, 2, true);
         assert!(fb.get(0, 0) && fb.get(1, 1));
         assert!(!fb.get(2, 2));
+    }
+
+    #[test]
+    fn draw_glyph_places_bits_top_to_bottom() {
+        let mut fb = Framebuffer::new();
+        // Synthetic glyph: column 0 has row 0 and row 2 set; other columns empty.
+        let g = [0b0000_0101u8, 0, 0, 0, 0];
+        fb.draw_glyph(10, 20, &g, 1);
+        assert!(fb.get(10, 20));       // col 0, row 0
+        assert!(!fb.get(10, 21));      // row 1 clear
+        assert!(fb.get(10, 22));       // col 0, row 2
+        assert!(!fb.get(11, 20));      // col 1 empty
+    }
+
+    #[test]
+    fn draw_glyph_scale_2_doubles_each_pixel() {
+        let mut fb = Framebuffer::new();
+        let g = [0b0000_0001u8, 0, 0, 0, 0]; // col 0, row 0 only
+        fb.draw_glyph(0, 0, &g, 2);
+        // one source pixel -> a 2x2 block
+        assert!(fb.get(0, 0) && fb.get(1, 0) && fb.get(0, 1) && fb.get(1, 1));
+        assert!(!fb.get(2, 0) && !fb.get(0, 2));
+    }
+
+    #[test]
+    fn text_width_is_six_px_per_char_times_scale() {
+        assert_eq!(text_width("AB", 1), 12);
+        assert_eq!(text_width("AB", 2), 24);
+        assert_eq!(text_width("", 1), 0);
+    }
+
+    #[test]
+    fn draw_text_and_space_glyph_is_blank() {
+        let mut fb = Framebuffer::new();
+        fb.draw_text(0, 0, " ", 1); // space -> nothing set, no panic
+        assert!((0..6).all(|x| (0..8).all(|y| !fb.get(x, y))));
+        fb.draw_text(150, 0, "ABCDEFG", 1); // runs off the right edge -> no panic
     }
 }
