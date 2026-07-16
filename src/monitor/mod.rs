@@ -743,17 +743,45 @@ impl MonitorApp {
         // --- Slots ---
         let mkeys = [MKey::M1, MKey::M2, MKey::M3];
         let mut switch_to: Option<MKey> = None;
+        // Deferred: (slot index, new color or None for "use default").
+        let mut slot_color_change: Option<(usize, Option<crate::led::Color>)> = None;
+        let cfg = self.profiles.read().unwrap().backlight_config();
         for (i, m) in mkeys.iter().enumerate() {
             let label = match &slot_names[i] {
                 Some(f) => format!("{m:?}  —  {}", display_of(f)),
                 None => format!("{m:?}  —  (unassigned)"),
             };
-            if ui.selectable_label(*m == active, label).clicked() {
-                switch_to = Some(*m);
-            }
+            let mut use_default = cfg.slot_colors[i].is_none();
+            let mut rgb = cfg.slot_colors[i]
+                .map(|c| [c.0, c.1, c.2])
+                .unwrap_or([cfg.default_color.0, cfg.default_color.1, cfg.default_color.2]);
+            ui.horizontal(|ui| {
+                if ui.selectable_label(*m == active, label).clicked() {
+                    switch_to = Some(*m);
+                }
+                if ui.checkbox(&mut use_default, "default").changed() {
+                    slot_color_change = Some((i, if use_default {
+                        None
+                    } else {
+                        Some(crate::led::Color(rgb[0], rgb[1], rgb[2]))
+                    }));
+                }
+                ui.add_enabled_ui(!use_default, |ui| {
+                    if egui::color_picker::color_edit_button_srgb(ui, &mut rgb).changed() {
+                        slot_color_change =
+                            Some((i, Some(crate::led::Color(rgb[0], rgb[1], rgb[2]))));
+                    }
+                });
+            });
         }
         if let Some(m) = switch_to {
             self.profiles.write().unwrap().set_active(m);
+        }
+        if let Some((i, c)) = slot_color_change {
+            self.profiles.write().unwrap().set_backlight_slot_color(i, c);
+            if let Err(e) = self.profiles.read().unwrap().persist_backlight() {
+                log::warn!("persist backlight failed: {e:#}");
+            }
         }
 
         ui.add_space(10.0);
