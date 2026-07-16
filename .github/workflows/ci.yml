@@ -18,6 +18,10 @@ on:
 
 jobs:
   build-test:
+    # Skip on release commits: the Release workflow builds+publishes those, and a release
+    # bump is version-only (version.txt/Cargo.toml/Cargo.lock) — the code was already validated
+    # by CI on the commit that introduced it, so re-running the full build+test is redundant.
+    if: ${{ github.event_name != 'push' || !startsWith(github.event.head_commit.message, 'release:') }}
     strategy:
       fail-fast: false
       matrix:
