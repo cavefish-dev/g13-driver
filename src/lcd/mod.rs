@@ -1,6 +1,8 @@
 mod font;
 
-use crate::protocol::MKey;
+use crate::config::ProfileSet;
+use crate::protocol::{G13Event, MKey};
+use std::sync::{Arc, Mutex, RwLock};
 
 pub const LCD_W: usize = 160;
 pub const LCD_H: usize = 43;
@@ -91,6 +93,32 @@ impl Framebuffer {
 /// Pixel width a string occupies: 6px (5 glyph + 1 gap) per char × scale.
 pub fn text_width(text: &str, scale: i32) -> i32 {
     text.chars().count() as i32 * 6 * scale
+}
+
+/// On a discrete-button KeyDown, record what it fired (button name + bound combo
+/// + label) from the profile active at press time. No-op for other events.
+pub fn capture(
+    event: &G13Event,
+    profiles: &Arc<RwLock<ProfileSet>>,
+    cell: &Arc<Mutex<Option<LastAction>>>,
+) {
+    let G13Event::KeyDown(key) = event else { return };
+    let key = *key;
+    let (combo, label) = {
+        let set = profiles.read().unwrap();
+        match set.active_profile() {
+            Some(p) => (
+                p.get_binding(key).map(str::to_string),
+                p.label(key).map(str::to_string),
+            ),
+            None => (None, None),
+        }
+    };
+    *cell.lock().unwrap() = Some(LastAction {
+        button: format!("{key:?}"),
+        combo,
+        label,
+    });
 }
 
 impl Default for Framebuffer {
@@ -307,5 +335,52 @@ mod tests {
     fn truncate_hard_cuts() {
         assert_eq!(truncate("abcdef", 3), "abc");
         assert_eq!(truncate("ab", 5), "ab");
+    }
+
+    use crate::protocol::{G13Event, G13Key};
+    use std::sync::{Arc, Mutex, RwLock};
+
+    // Build a single-M1-profile ProfileSet with G1->ctrl+c labelled "Copy".
+    fn profiles_fixture() -> Arc<RwLock<crate::config::ProfileSet>> {
+        let d = std::env::temp_dir().join("g13-lcd-capture");
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("profiles")).unwrap();
+        std::fs::write(d.join("profiles/basic.toml"),
+            "[keys]\nG1 = \"ctrl+c\"\n\n[labels]\nG1 = \"Copy\"\n").unwrap();
+        std::fs::write(d.join("config.toml"),
+            "profiles_dir = \"profiles\"\nm1 = \"basic.toml\"\n").unwrap();
+        Arc::new(RwLock::new(crate::config::ProfileSet::load(&d.join("config.toml")).unwrap()))
+    }
+
+    #[test]
+    fn capture_resolves_binding_and_label() {
+        let p = profiles_fixture();
+        let cell = Arc::new(Mutex::new(None));
+        capture(&G13Event::KeyDown(G13Key::G1), &p, &cell);
+        let got = cell.lock().unwrap().clone().unwrap();
+        assert_eq!(got.button, "G1");
+        assert_eq!(got.combo.as_deref(), Some("ctrl+c"));
+        assert_eq!(got.label.as_deref(), Some("Copy"));
+    }
+
+    #[test]
+    fn capture_unbound_key_has_no_combo() {
+        let p = profiles_fixture();
+        let cell = Arc::new(Mutex::new(None));
+        capture(&G13Event::KeyDown(G13Key::G7), &p, &cell); // G7 unbound
+        let got = cell.lock().unwrap().clone().unwrap();
+        assert_eq!(got.button, "G7");
+        assert_eq!(got.combo, None);
+        assert_eq!(got.label, None);
+    }
+
+    #[test]
+    fn capture_ignores_non_keydown() {
+        let p = profiles_fixture();
+        let cell = Arc::new(Mutex::new(None));
+        capture(&G13Event::KeyUp(G13Key::G1), &p, &cell);
+        capture(&G13Event::JoystickMove { x: 0, y: 0 }, &p, &cell);
+        capture(&G13Event::MKeyDown(MKey::M2), &p, &cell);
+        assert!(cell.lock().unwrap().is_none());
     }
 }
