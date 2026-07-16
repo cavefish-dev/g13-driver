@@ -316,8 +316,6 @@ mod tests {
         fb.draw_text(150, 0, "ABCDEFG", 1); // runs off the right edge -> no panic
     }
 
-    use crate::protocol::MKey;
-
     fn any_pixel_in_row_band(fb: &Framebuffer, y0: usize, y1: usize) -> bool {
         (0..LCD_W).any(|x| (y0..y1).any(|y| fb.get(x, y)))
     }
@@ -364,8 +362,7 @@ mod tests {
         assert_eq!(truncate("ab", 5), "ab");
     }
 
-    use crate::protocol::{G13Event, G13Key};
-    use std::sync::{Arc, Mutex, RwLock};
+    use crate::protocol::G13Key;
 
     // Build a single-M1-profile ProfileSet with G1->ctrl+c labelled "Copy".
     fn profiles_fixture() -> Arc<RwLock<crate::config::ProfileSet>> {
@@ -397,6 +394,27 @@ mod tests {
         capture(&G13Event::KeyDown(G13Key::G7), &p, &cell); // G7 unbound
         let got = cell.lock().unwrap().clone().unwrap();
         assert_eq!(got.button, "G7");
+        assert_eq!(got.combo, None);
+        assert_eq!(got.label, None);
+    }
+
+    #[test]
+    fn capture_active_slot_empty_has_no_combo_or_label() {
+        // Manifest mode (profiles_dir set) with no m1/m2/m3 assigned: active
+        // defaults to M1, whose slot is empty, so active_profile() is None.
+        let d = std::env::temp_dir().join("g13-lcd-capture-empty");
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("profiles")).unwrap();
+        std::fs::write(d.join("config.toml"), "profiles_dir = \"profiles\"\n").unwrap();
+        let p = Arc::new(RwLock::new(
+            crate::config::ProfileSet::load(&d.join("config.toml")).unwrap(),
+        ));
+        assert!(p.read().unwrap().active_profile().is_none());
+
+        let cell = Arc::new(Mutex::new(None));
+        capture(&G13Event::KeyDown(G13Key::G1), &p, &cell);
+        let got = cell.lock().unwrap().clone().unwrap();
+        assert_eq!(got.button, "G1");
         assert_eq!(got.combo, None);
         assert_eq!(got.label, None);
     }

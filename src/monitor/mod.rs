@@ -347,7 +347,7 @@ impl MonitorApp {
         let desired = std::sync::Arc::new(std::sync::Mutex::new(
             self.profiles.read().unwrap().desired_led_state()));
         crate::led::spawn_poller(self.profiles.clone(), desired.clone());
-        let lcd_frame = std::sync::Arc::new(std::sync::Mutex::new([0u8; 992]));
+        let lcd_frame = std::sync::Arc::new(std::sync::Mutex::new(crate::lcd::Framebuffer::new().pack()));
         crate::lcd::spawn_poller(
             self.profiles.clone(),
             self.dry_run.clone(),

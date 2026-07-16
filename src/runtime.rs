@@ -43,7 +43,7 @@ pub fn run_headless(config: Arc<RwLock<ProfileSet>>) -> Result<()> {
     let (tx, rx) = mpsc::channel::<G13Event>();
     let desired = Arc::new(Mutex::new(config.read().unwrap().desired_led_state()));
     crate::led::spawn_poller(config.clone(), desired.clone());
-    let lcd_frame = Arc::new(Mutex::new([0u8; 992]));
+    let lcd_frame = Arc::new(Mutex::new(crate::lcd::Framebuffer::new().pack()));
     let last_action = Arc::new(Mutex::new(None));
     let lcd_mode = Arc::new(std::sync::atomic::AtomicBool::new(false)); // headless = always Active
     crate::lcd::spawn_poller(config.clone(), lcd_mode, last_action.clone(), lcd_frame.clone());
