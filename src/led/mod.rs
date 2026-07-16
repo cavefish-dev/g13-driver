@@ -12,7 +12,7 @@ impl Color {
     /// Parse `#RRGGBB` or `RRGGBB` (case-insensitive). `None` on any malformed input.
     pub fn from_hex(s: &str) -> Option<Color> {
         let h = s.strip_prefix('#').unwrap_or(s);
-        if h.len() != 6 {
+        if h.len() != 6 || !h.is_ascii() {
             return None;
         }
         let r = u8::from_str_radix(&h[0..2], 16).ok()?;
@@ -52,6 +52,9 @@ pub struct LedState {
 }
 
 /// Map an active M-slot to `slot_colors` index (M1/M2/M3); MR has no slot.
+/// Invariant: the M-key bitmask used below in `resolve` equals `1 << slot_index(m)`
+/// for M1/M2/M3 (1, 2, 4 respectively) — keep this match and the one in `resolve`
+/// in sync if M-key slots ever change.
 fn slot_index(m: MKey) -> Option<usize> {
     match m {
         MKey::M1 => Some(0),
@@ -106,7 +109,6 @@ pub fn spawn_poller(config: Arc<RwLock<ProfileSet>>, desired: Arc<Mutex<LedState
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::MKey;
 
     #[test]
     fn hex_round_trip() {
@@ -115,6 +117,13 @@ mod tests {
         assert_eq!(Color(0xFF, 0x30, 0x10).to_hex(), "#FF3010");
         assert_eq!(Color::from_hex("white"), None);   // malformed -> None
         assert_eq!(Color::from_hex("#FFF"), None);    // wrong length -> None
+    }
+
+    #[test]
+    fn from_hex_rejects_non_ascii_without_panicking() {
+        // "€€" is 6 bytes (3 bytes/char) but not 6 chars; slicing by byte index
+        // would land mid-codepoint and panic. Must return None instead.
+        assert_eq!(Color::from_hex("€€"), None);
     }
 
     fn cfg() -> BacklightConfig {

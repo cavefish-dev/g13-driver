@@ -360,7 +360,15 @@ impl ProfileSet {
         let backlight = raw.backlight.map(|b| {
             use crate::led::{BacklightConfig, Color};
             let d = BacklightConfig::default();
-            let parse = |s: Option<String>| s.and_then(|v| Color::from_hex(&v));
+            // Present-but-unparseable colors fall back to the default and warn;
+            // an absent field falls back silently.
+            let parse = |s: Option<String>| s.and_then(|v| {
+                let parsed = Color::from_hex(&v);
+                if parsed.is_none() {
+                    log::warn!("invalid [backlight] color {v:?}; using default");
+                }
+                parsed
+            });
             BacklightConfig {
                 default_color: parse(b.default_color).unwrap_or(d.default_color),
                 brightness: b.brightness.unwrap_or(d.brightness).clamp(0.0, 1.0),
@@ -1056,6 +1064,29 @@ mod profileset_tests {
         // Original manifest keys are preserved.
         let text = std::fs::read_to_string(d.join("config.toml")).unwrap();
         assert!(text.contains("m1 = \"basic.toml\""));
+    }
+
+    #[test]
+    fn persist_backlight_removes_existing_slot_color_key() {
+        let d = std::env::temp_dir().join("g13-cfg-persistbl-remove");
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("profiles")).unwrap();
+        std::fs::write(d.join("profiles/basic.toml"), "[keys]\nG1 = \"a\"\n").unwrap();
+        std::fs::write(d.join("config.toml"),
+            "profiles_dir = \"profiles\"\nm1 = \"basic.toml\"\n\
+             [backlight]\nm1_color = \"#FF0000\"\n").unwrap();
+
+        let mut set = ProfileSet::load(&d.join("config.toml")).unwrap();
+        assert_eq!(set.backlight_config().slot_colors[0], Some(crate::led::Color(0xFF, 0x00, 0x00)));
+
+        set.set_backlight_slot_color(0, None);
+        set.persist_backlight().unwrap();
+
+        let reloaded = ProfileSet::load(&d.join("config.toml")).unwrap();
+        assert_eq!(reloaded.backlight_config().slot_colors[0], None);
+
+        let text = std::fs::read_to_string(d.join("config.toml")).unwrap();
+        assert!(!text.contains("m1_color"), "m1_color key removed from disk");
     }
 }
 
