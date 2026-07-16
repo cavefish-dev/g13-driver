@@ -1290,21 +1290,45 @@ impl MonitorApp {
 
     fn render_lcd(&self, ui: &mut egui::Ui) {
         ui.heading("LCD  (160 × 43)");
-        ui.label("Preview and choose what shows on the G13's screen. Planned for v0.4.");
+        ui.label("Live preview of what the G13's screen shows.");
         ui.add_space(8.0);
-        // 3x-scale preview of the monochrome 160x43 panel.
-        let size = egui::vec2(160.0 * 3.0, 43.0 * 3.0);
+
+        // Build the same model the poller uses.
+        let model = {
+            let set = self.profiles.read().unwrap();
+            crate::lcd::LcdModel {
+                mode: if self.dry_run.load(Ordering::Relaxed) {
+                    crate::lcd::Mode::DryRun
+                } else {
+                    crate::lcd::Mode::Active
+                },
+                slot: set.active(),
+                profile_name: set.active_name().map(str::to_string),
+                last: self.last_action.lock().unwrap().clone(),
+            }
+        };
+        let fb = crate::lcd::render(&model);
+
+        // Paint at 3× on a dark-green panel.
+        let scale = 3.0;
+        let size = egui::vec2(crate::lcd::LCD_W as f32 * scale, crate::lcd::LCD_H as f32 * scale);
         let (resp, painter) = ui.allocate_painter(size, egui::Sense::hover());
-        let rect = resp.rect;
-        painter.rect_filled(rect, 2.0, egui::Color32::from_rgb(20, 30, 24));
-        painter.rect_stroke(rect, 2.0, egui::Stroke::new(1.0, egui::Color32::from_gray(90)), egui::StrokeKind::Inside);
-        let green = egui::Color32::from_rgb(120, 230, 150);
-        let o = rect.left_top();
-        painter.text(o + egui::vec2(8.0, 6.0), egui::Align2::LEFT_TOP, "G13 Driver", egui::FontId::monospace(16.0), green);
-        painter.text(o + egui::vec2(8.0, 34.0), egui::Align2::LEFT_TOP, "Profile: Default", egui::FontId::monospace(13.0), green);
-        painter.text(o + egui::vec2(8.0, 58.0), egui::Align2::LEFT_TOP, "Active · 12:04", egui::FontId::monospace(13.0), green);
-        ui.add_space(8.0);
-        ui.weak("(placeholder — no LCD output yet; needs the display protocol)");
+        let o = resp.rect.left_top();
+        painter.rect_filled(resp.rect, 2.0, egui::Color32::from_rgb(20, 30, 24));
+        let on = egui::Color32::from_rgb(150, 245, 170);
+        for y in 0..crate::lcd::LCD_H {
+            for x in 0..crate::lcd::LCD_W {
+                if fb.get(x, y) {
+                    let p = o + egui::vec2(x as f32 * scale, y as f32 * scale);
+                    painter.rect_filled(
+                        egui::Rect::from_min_size(p, egui::vec2(scale, scale)),
+                        0.0, on,
+                    );
+                }
+            }
+        }
+        ui.add_space(6.0);
+        ui.weak("Press G-keys / switch profiles to see the display update.");
     }
 
     fn render_settings(&self, ui: &mut egui::Ui) {
