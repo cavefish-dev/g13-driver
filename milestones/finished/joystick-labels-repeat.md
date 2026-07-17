@@ -1,6 +1,6 @@
 # Joystick labels + repeat
 
-- **Status:** ongoing
+- **Status:** finished
 - **Target:** v0.2
 - **Updated:** 2026-07-17
 
@@ -19,11 +19,15 @@ which shows joystick labels on the display.
 A joystick direction with `repeat = true` auto-repeats its key while held; labels and
 repeat flags edit in the Bindings tab and persist. Existing profiles keep working.
 
-## Hardware smoke test (manual)
-- [ ] A joystick direction with `repeat = true` auto-repeats its key while held
-      (e.g. holding the stick fires the key repeatedly); `repeat = false` holds without repeating.
-- [ ] Labels + repeat flags set in the Bindings tab save and survive a reload.
-- [ ] An existing profile with a plain `[joystick]` still loads and works unchanged.
+## Hardware smoke test (manual) — PASSED 2026-07-17
+- [x] A joystick direction with `repeat = true` auto-repeats its key while held;
+      `repeat = false` holds without repeating.
+- [x] Labels + repeat flags set in the Bindings tab save and survive a reload.
+- [x] An existing profile with a plain `[joystick]` still loads and works unchanged.
+
+## Follow-up
+- User feedback: the joystick binding-row UI is preferred over the G-key row UI;
+  unify all Bindings-tab mappings to one style (tracked separately).
 
 ## Notes
 - Design: `docs/superpowers/specs/2026-07-17-joystick-labels-repeat-design.md`.
