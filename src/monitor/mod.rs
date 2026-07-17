@@ -1329,6 +1329,84 @@ impl MonitorApp {
         ui.label("Live preview of what the G13's screen shows.");
         ui.add_space(8.0);
 
+        // Controls for the `[lcd]` config. `cfg` is a `Copy` snapshot read in its own
+        // statement so the read guard drops immediately — each setter `write()` below
+        // (and the final `persist_lcd()` read) is its own statement, never overlapping.
+        let cfg = self.profiles.read().unwrap().lcd_config();
+        let mut changed = false;
+
+        egui::ComboBox::from_label("Line 1 left")
+            .selected_text(cfg.line1_left.as_str())
+            .show_ui(ui, |ui| {
+                for opt in [crate::lcd::Line1Left::Name, crate::lcd::Line1Left::Version] {
+                    if ui.selectable_label(cfg.line1_left == opt, opt.as_str()).clicked() {
+                        self.profiles.write().unwrap().set_lcd_line1_left(opt);
+                        changed = true;
+                    }
+                }
+            });
+        let mut clock = cfg.line1_clock;
+        if ui.checkbox(&mut clock, "Clock").changed() {
+            self.profiles.write().unwrap().set_lcd_line1_clock(clock);
+            changed = true;
+        }
+
+        egui::ComboBox::from_label("Line 1 mode")
+            .selected_text(cfg.line1_mode.as_str())
+            .show_ui(ui, |ui| {
+                for opt in [
+                    crate::lcd::ModeDisplay::Label,
+                    crate::lcd::ModeDisplay::Icon,
+                    crate::lcd::ModeDisplay::Off,
+                ] {
+                    if ui.selectable_label(cfg.line1_mode == opt, opt.as_str()).clicked() {
+                        self.profiles.write().unwrap().set_lcd_line1_mode(opt);
+                        changed = true;
+                    }
+                }
+            });
+
+        egui::ComboBox::from_label("Line 2 source")
+            .selected_text(cfg.line2_source.as_str())
+            .show_ui(ui, |ui| {
+                for opt in [crate::lcd::Line2Source::Filename, crate::lcd::Line2Source::Display] {
+                    if ui.selectable_label(cfg.line2_source == opt, opt.as_str()).clicked() {
+                        self.profiles.write().unwrap().set_lcd_line2_source(opt);
+                        changed = true;
+                    }
+                }
+            });
+
+        egui::ComboBox::from_label("Line 3 trigger")
+            .selected_text(cfg.line3_trigger.as_str())
+            .show_ui(ui, |ui| {
+                for opt in [crate::lcd::Line3Trigger::Last, crate::lcd::Line3Trigger::Held] {
+                    if ui.selectable_label(cfg.line3_trigger == opt, opt.as_str()).clicked() {
+                        self.profiles.write().unwrap().set_lcd_line3_trigger(opt);
+                        changed = true;
+                    }
+                }
+            });
+        let mut mapping = cfg.line3_mapping;
+        if ui.checkbox(&mut mapping, "Show mapping").changed() {
+            self.profiles.write().unwrap().set_lcd_line3_mapping(mapping);
+            changed = true;
+        }
+        let mut label = cfg.line3_label;
+        if ui.checkbox(&mut label, "Show label").changed() {
+            self.profiles.write().unwrap().set_lcd_line3_label(label);
+            changed = true;
+        }
+
+        if changed {
+            if let Err(e) = self.profiles.read().unwrap().persist_lcd() {
+                log::warn!("persist lcd failed: {e:#}");
+            }
+        }
+        ui.add_space(8.0);
+        ui.separator();
+        ui.add_space(8.0);
+
         // Build the same model + config the poller uses. `cfg` is fetched (and its
         // read guard dropped) before the tracker lock, so we never hold a
         // `profiles.read()` guard across `tracker.lock()` (see consumer_loop /
