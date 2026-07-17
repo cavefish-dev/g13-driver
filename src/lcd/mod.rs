@@ -217,7 +217,7 @@ pub fn spawn_poller(
             LcdModel {
                 mode: if dry_run.load(Ordering::Relaxed) { Mode::DryRun } else { Mode::Active },
                 slot: set.active(),
-                profile_name: set.active_name().map(str::to_string),
+                profile_name: set.active_name_stem().map(str::to_string),
                 last: last.lock().unwrap().clone(),
             }
         };

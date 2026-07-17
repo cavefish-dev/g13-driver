@@ -587,6 +587,11 @@ impl ProfileSet {
 
     pub fn active_name(&self) -> Option<&str> { self.name(self.active) }
 
+    /// The active profile's filename without the `.toml` extension (for the LCD).
+    pub fn active_name_stem(&self) -> Option<&str> {
+        self.active_name().map(|n| n.trim_end_matches(".toml"))
+    }
+
     pub fn profiles_dir(&self) -> &std::path::Path { &self.profiles_dir }
 
     /// The file path backing the active profile (profiles_dir + active filename;
@@ -1087,6 +1092,20 @@ mod profileset_tests {
 
         let text = std::fs::read_to_string(d.join("config.toml")).unwrap();
         assert!(!text.contains("m1_color"), "m1_color key removed from disk");
+    }
+
+    #[test]
+    fn active_name_stem_strips_toml_extension() {
+        let d = std::env::temp_dir().join("g13-cfg-stem");
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("profiles")).unwrap();
+        std::fs::write(d.join("profiles/basic.toml"), "[keys]\nG1 = \"a\"\n").unwrap();
+        std::fs::write(d.join("config.toml"),
+            "profiles_dir = \"profiles\"\nm1 = \"basic.toml\"\n").unwrap();
+
+        let set = ProfileSet::load(&d.join("config.toml")).unwrap();
+        assert_eq!(set.active_name(), Some("basic.toml"));   // raw filename unchanged
+        assert_eq!(set.active_name_stem(), Some("basic"));   // stem drops .toml
     }
 }
 

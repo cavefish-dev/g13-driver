@@ -1303,7 +1303,7 @@ impl MonitorApp {
                     crate::lcd::Mode::Active
                 },
                 slot: set.active(),
-                profile_name: set.active_name().map(str::to_string),
+                profile_name: set.active_name_stem().map(str::to_string),
                 last: self.last_action.lock().unwrap().clone(),
             }
         };
