@@ -29,3 +29,13 @@ deadzone = 50
 # mkey_indicator = true        # light the active profile's M-key LED
 # m1_color       = "#FF0000"   # optional per-slot overrides
 # m2_color       = "#3030FF"
+
+# LCD content (per-line; managed by the GUI LCD tab, safe to edit by hand while stopped).
+# [lcd]
+# line1_left    = "name"      # "name" | "version"
+# line1_clock   = false       # show an HH:MM clock
+# line1_mode    = "label"     # "label" | "icon" | "off"
+# line2_source  = "filename"  # "filename" | "display"
+# line3_trigger = "last"      # "last" | "held"
+# line3_mapping = true        # show the combo/key
+# line3_label   = true        # show the mapping label
