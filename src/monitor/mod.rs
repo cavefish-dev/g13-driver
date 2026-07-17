@@ -1580,7 +1580,7 @@ impl MonitorApp {
                 pauses injection so you can test the keypad safely without sending keystrokes \
                 anywhere. Press the MR key (or the tray menu / the toggle on the Settings tab) \
                 to switch — the LCD mode box and the tray icon reflect the current mode, and \
-                the MR LED lights up while in Dry-run.");
+                the MR LED lights up while in Dry-run (when the M-key indicator is enabled).");
             ui.add_space(6.0);
 
             ui.heading("First-time setup");
