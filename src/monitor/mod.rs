@@ -160,6 +160,7 @@ enum Tab {
     Catalog,
     Lcd,
     Settings,
+    Help,
 }
 
 #[derive(Clone)]
@@ -179,13 +180,14 @@ enum Action {
     Prompt(NamePrompt),
 }
 
-const TABS: [(Tab, &str); 6] = [
+const TABS: [(Tab, &str); 7] = [
     (Tab::Monitor, "Monitor"),
     (Tab::Profiles, "Profiles"),
     (Tab::Bindings, "Bindings"),
     (Tab::Catalog, "Catalog"),
     (Tab::Lcd, "LCD"),
     (Tab::Settings, "Settings"),
+    (Tab::Help, "Help"),
 ];
 
 pub struct MonitorApp {
@@ -627,6 +629,7 @@ impl eframe::App for MonitorApp {
                 Tab::Catalog => self.render_catalog(ui),
                 Tab::Lcd => self.render_lcd(ui),
                 Tab::Settings => self.render_settings(ui),
+                Tab::Help => self.render_help(ui),
             }
         });
     }
@@ -1562,6 +1565,53 @@ impl MonitorApp {
             }
         }
         ui.weak("Applies to the whole keypad; brightness 0 turns the backlight off.");
+    }
+
+    /// Static usage guide. Read-only, no locks needed.
+    fn render_help(&self, ui: &mut egui::Ui) {
+        ui.heading("Help");
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            ui.label("g13-driver is an open-source replacement driver for the Logitech G13 \
+                gaming keypad (the official drivers are abandonware).");
+            ui.add_space(6.0);
+
+            ui.heading("Active vs Dry-run");
+            ui.label("Active injects your key bindings into whatever app has focus; Dry-run \
+                pauses injection so you can test the keypad safely without sending keystrokes \
+                anywhere. Press the MR key (or the tray menu / the toggle on the Settings tab) \
+                to switch — the LCD mode box and the tray icon reflect the current mode, and \
+                the MR LED lights up while in Dry-run.");
+            ui.add_space(6.0);
+
+            ui.heading("First-time setup");
+            ui.label("Before the app can talk to the G13, install the WinUSB driver for it \
+                using Zadig — see docs/zadig-setup.md for step-by-step instructions. This is a \
+                one-time setup per machine.");
+            ui.add_space(6.0);
+
+            ui.heading("Tabs");
+            ui.label("Monitor — a live view of the keypad: G-keys, thumb buttons and the \
+                joystick light up as you press them. Safe to use in Dry-run.");
+            ui.label("Profiles — the M1/M2/M3 slots, each backed by its own profile file in a \
+                folder. Switch the active profile with the M-keys on the device or from this tab.");
+            ui.label("Bindings — edit the active profile: for each G-key, thumb button and \
+                joystick direction you can set a key or combo, an optional label, and an \
+                auto-repeat toggle.");
+            ui.label("Catalog — browse, download and revert community-shared profiles.");
+            ui.label("LCD — choose what each of the 3 LCD lines shows, with a live preview.");
+            ui.label("Settings — backlight color (per profile) and brightness, the M-key \
+                indicator, joystick deadzone, launch-at-login, and update checks.");
+            ui.add_space(6.0);
+
+            ui.heading("Tray & window");
+            ui.label("Closing or minimizing the window hides it to the system tray — the \
+                driver keeps running in the background. Quit from the tray menu to exit fully.");
+            ui.add_space(6.0);
+
+            ui.heading("Config file");
+            ui.label("The app loads config.toml next to the executable (or the current \
+                working directory). Changes made in the GUI are saved back to that file.");
+        });
     }
 }
 
