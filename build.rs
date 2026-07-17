@@ -52,7 +52,8 @@ fn main() {
         }
 
         let mut icon_dir = ico::IconDir::new(ico::ResourceType::Icon);
-        for size in [16u32, 32, 48, 256] {
+        // Skip 16px: "g13" is 17 cols wide and won't fit — Windows downscales 32→16.
+        for size in [32u32, 48, 256] {
             icon_dir.add_entry(ico::IconDirEntry::encode(&render(size)).unwrap());
         }
         let out = std::path::Path::new(&std::env::var("OUT_DIR").unwrap()).join("g13.ico");
