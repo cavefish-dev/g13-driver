@@ -240,6 +240,8 @@ pub fn render(model: &LcdModel, cfg: &LcdConfig) -> Framebuffer {
     // Line 1 left.
     let version = format!("v{}", env!("G13_VERSION"));
     let left = match cfg.line1_left { Line1Left::Name => "G13 Driver", Line1Left::Version => version.as_str() };
+    // Left strings are one of two fixed short literals ("G13 Driver" / "v{VERSION}"),
+    // so they never reach the right cluster and don't need width clamping.
     fb.draw_text(0, 0, left, 1);
 
     // Line 1 right cluster: [clock] [mode]. Build right-to-left.
@@ -293,7 +295,7 @@ pub fn render(model: &LcdModel, cfg: &LcdConfig) -> Framebuffer {
         if cfg.line3_label {
             if let Some(l) = &a.label { line.push_str("  "); line.push_str(l); }
         }
-        fb.draw_text(0, 32, &truncate(&line, 26), 1);
+        fb.draw_text(0, 32, &sanitize(&truncate(&line, 26)), 1);
     }
     fb
 }

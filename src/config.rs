@@ -238,8 +238,6 @@ impl Profile {
         self.key_bindings = bindings;
     }
 
-    // Schema read-accessor; exercised by tests, kept as the symmetric pair to set_meta_name.
-    #[allow(dead_code)]
     pub fn meta_name(&self) -> Option<&str> {
         self.meta_name.as_deref()
     }
