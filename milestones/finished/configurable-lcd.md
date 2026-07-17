@@ -1,6 +1,6 @@
 # Configurable LCD
 
-- **Status:** ongoing
+- **Status:** finished
 - **Target:** v0.2
 - **Updated:** 2026-07-17
 
@@ -20,7 +20,7 @@ joystick directions (with sub-project A's labels) and a "while held" mode.
 Each knob changes the physical LCD + preview live; joystick direction labels show on
 line 3 in both trigger modes; clock ticks; unicode display names sanitize to `*`.
 
-## Hardware smoke test (manual)
+## Hardware smoke test (manual) — PASSED 2026-07-17 (visual GUI+preview pass; user approved)
 - [ ] Each [lcd] knob changes the physical LCD + preview live (line1 name/version, clock on/off, mode label/icon/off; line2 filename/display; line3 last/held, mapping/label).
 - [ ] Joystick direction labels appear on line 3 (both "last" and "held" triggers).
 - [ ] Clock shows current HH:MM and ticks.
@@ -30,3 +30,7 @@ line 3 in both trigger modes; clock ticks; unicode display names sanitize to `*`
 ## Notes
 - Design: `docs/superpowers/specs/2026-07-17-configurable-lcd-design.md`.
 - Sub-project B of two; A (joystick labels + repeat) is merged and provides the labels.
+
+## Follow-up requests (during smoke)
+- Center the line-1 clock (currently right-clustered).
+- Light the MR LED while in dry-run mode (tracked separately).
