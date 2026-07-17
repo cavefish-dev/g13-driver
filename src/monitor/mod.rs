@@ -1329,21 +1329,26 @@ impl MonitorApp {
         ui.label("Live preview of what the G13's screen shows.");
         ui.add_space(8.0);
 
-        // Build the same model the poller uses.
-        let model = {
+        // Build the same model + config the poller uses.
+        let (cfg, model) = {
             let set = self.profiles.read().unwrap();
-            crate::lcd::LcdModel {
+            let cfg = set.lcd_config();
+            let clock = if cfg.line1_clock { Some(crate::lcd::local_hh_mm()) } else { None };
+            let model = crate::lcd::LcdModel {
                 mode: if self.dry_run.load(Ordering::Relaxed) {
                     crate::lcd::Mode::DryRun
                 } else {
                     crate::lcd::Mode::Active
                 },
                 slot: set.active(),
-                profile_name: set.active_name_stem().map(str::to_string),
+                filename: set.active_name_stem().map(str::to_string),
+                display_name: set.active_profile().and_then(|p| p.meta_name()).map(str::to_string),
                 last: self.last_action.lock().unwrap().clone(),
-            }
+                clock,
+            };
+            (cfg, model)
         };
-        let fb = crate::lcd::render(&model);
+        let fb = crate::lcd::render(&model, &cfg);
 
         // Paint at 3× on a dark-green panel.
         let scale = 3.0;

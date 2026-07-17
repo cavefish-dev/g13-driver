@@ -224,8 +224,10 @@ pub struct LastAction {
 pub struct LcdModel {
     pub mode: Mode,
     pub slot: MKey,
-    pub profile_name: Option<String>,
+    pub filename: Option<String>,
+    pub display_name: Option<String>,
     pub last: Option<LastAction>,
+    pub clock: Option<String>,
 }
 
 fn truncate(text: &str, max_chars: usize) -> String {
@@ -236,52 +238,89 @@ fn slot_label(slot: MKey) -> &'static str {
     match slot { MKey::M1 => "M1", MKey::M2 => "M2", MKey::M3 => "M3", MKey::MR => "MR" }
 }
 
-/// Render the HUD: title + mode (y0), divider (y9), slot + profile name at 2×
-/// (y12), last action (y30).
-pub fn render(model: &LcdModel) -> Framebuffer {
+/// Replace any non-printable-ASCII char with `*` so the 5×7 bitmap font (which
+/// only has glyphs for `' '..='~'`) never gets asked to render something it
+/// can't draw.
+pub fn sanitize(s: &str) -> String {
+    s.chars().map(|c| if (' '..='~').contains(&c) { c } else { '*' }).collect()
+}
+
+/// Current local time as `HH:MM`, via `GetLocalTime`. Non-Windows builds
+/// (tests, cross-compiles) return an empty string.
+#[cfg(windows)]
+pub fn local_hh_mm() -> String {
+    use windows_sys::Win32::System::SystemInformation::GetLocalTime;
+    let mut st: windows_sys::Win32::Foundation::SYSTEMTIME = unsafe { std::mem::zeroed() };
+    unsafe { GetLocalTime(&mut st) };
+    format!("{:02}:{:02}", st.wHour, st.wMinute)
+}
+#[cfg(not(windows))]
+pub fn local_hh_mm() -> String { String::new() }
+
+/// Render the HUD per `cfg`: line 1 title/clock/mode (y0), divider (y9), slot +
+/// name at 2× (y12), last action (y32). Pure — the clock string is supplied by
+/// the caller via `model.clock` rather than read here.
+pub fn render(model: &LcdModel, cfg: &LcdConfig) -> Framebuffer {
     let mut fb = Framebuffer::new();
 
-    // Title (left) + mode (right).
-    fb.draw_text(0, 0, "G13 Driver", 1);
-    let (mode_text, filled) = match model.mode {
-        Mode::Active => ("ACTIVE", true),
-        Mode::DryRun => ("DRY-RUN", false),
-    };
-    let box_x = LCD_W as i32 - text_width(mode_text, 1) - 9;
-    if filled {
-        fb.fill_rect(box_x, 1, 6, 6, true);
-    } else {
-        fb.draw_hline(box_x, 1, 6);
-        fb.draw_hline(box_x, 6, 6);
-        for dy in 1..7 { fb.set_pixel(box_x, dy, true); fb.set_pixel(box_x + 5, dy, true); }
+    // Line 1 left.
+    let version = format!("v{}", env!("G13_VERSION"));
+    let left = match cfg.line1_left { Line1Left::Name => "G13 Driver", Line1Left::Version => version.as_str() };
+    fb.draw_text(0, 0, left, 1);
+
+    // Line 1 right cluster: [clock] [mode]. Build right-to-left.
+    let mode_text = match model.mode { Mode::Active => "ACTIVE", Mode::DryRun => "DRY-RUN" };
+    let filled = matches!(model.mode, Mode::Active);
+    let mut x = LCD_W as i32;
+    if cfg.line1_mode == ModeDisplay::Label {
+        x -= text_width(mode_text, 1);
+        fb.draw_text(x, 0, mode_text, 1);
+        x -= 8; // box + gap
+    } else if cfg.line1_mode == ModeDisplay::Icon {
+        x -= 6;
     }
-    fb.draw_text(box_x + 8, 0, mode_text, 1);
+    if cfg.line1_mode != ModeDisplay::Off {
+        let bx = x; // draw the box at bx..bx+6
+        if filled { fb.fill_rect(bx, 1, 6, 6, true); }
+        else {
+            fb.draw_hline(bx, 1, 6); fb.draw_hline(bx, 6, 6);
+            for dy in 1..7 { fb.set_pixel(bx, dy, true); fb.set_pixel(bx + 5, dy, true); }
+        }
+        x -= 3; // gap before clock
+    }
+    if cfg.line1_clock {
+        if let Some(clk) = &model.clock {
+            x -= text_width(clk, 1);
+            fb.draw_text(x, 0, clk, 1);
+        }
+    }
 
     // Divider.
     fb.draw_hline(0, 9, LCD_W as i32);
 
-    // Slot + profile name (name at 2×). Slot label single height, baseline-ish aligned.
+    // Line 2: slot + name (2x), per source, sanitized.
     fb.draw_text(0, 16, slot_label(model.slot), 1);
-    let name = match &model.profile_name {
-        Some(n) => truncate(n, 12),
-        None => "(empty)".to_string(),
+    let raw_name = match cfg.line2_source {
+        Line2Source::Filename => model.filename.clone(),
+        Line2Source::Display => model.display_name.clone().or_else(|| model.filename.clone()),
     };
+    let name = match raw_name { Some(n) => truncate(&sanitize(&n), 12), None => "(empty)".to_string() };
     fb.draw_text(18, 12, &name, 2);
 
-    // Last action: "BUTTON  combo  label" (blank when None).
+    // Line 3: button [+ combo] [+ label] per flags.
     if let Some(a) = &model.last {
         let mut line = a.button.clone();
-        match &a.combo {
-            Some(c) => { line.push_str("  "); line.push_str(c); }
-            None => line.push_str("  (unbound)"),
+        if cfg.line3_mapping {
+            match &a.combo {
+                Some(c) => { line.push_str("  "); line.push_str(c); }
+                None => line.push_str("  (unbound)"),
+            }
         }
-        if let Some(l) = &a.label {
-            line.push_str("  ");
-            line.push_str(l);
+        if cfg.line3_label {
+            if let Some(l) = &a.label { line.push_str("  "); line.push_str(l); }
         }
         fb.draw_text(0, 32, &truncate(&line, 26), 1);
     }
-
     fb
 }
 
@@ -294,17 +333,21 @@ pub fn spawn_poller(
     frame: Arc<Mutex<[u8; 992]>>,
 ) {
     thread::spawn(move || loop {
-        let model = {
+        let (cfg, model) = {
             let set = profiles.read().unwrap();
-            LcdModel {
+            let cfg = set.lcd_config();
+            let clock = if cfg.line1_clock { Some(local_hh_mm()) } else { None };
+            let model = LcdModel {
                 mode: if dry_run.load(Ordering::Relaxed) { Mode::DryRun } else { Mode::Active },
                 slot: set.active(),
-                profile_name: set.active_name_stem().map(str::to_string),
+                filename: set.active_name_stem().map(str::to_string),
+                display_name: set.active_profile().and_then(|p| p.meta_name()).map(str::to_string),
                 last: last.lock().unwrap().clone(),
-            }
+                clock,
+            };
+            (cfg, model)
         };
-        let packed = render(&model).pack();
-        *frame.lock().unwrap() = packed;
+        *frame.lock().unwrap() = render(&model, &cfg).pack();
         thread::sleep(Duration::from_millis(150));
     });
 }
@@ -448,19 +491,21 @@ mod tests {
         (0..LCD_W).any(|x| (y0..y1).any(|y| fb.get(x, y)))
     }
 
+    fn model(last: Option<LastAction>) -> LcdModel {
+        LcdModel { mode: Mode::Active, slot: MKey::M2,
+            filename: Some("basic".into()), display_name: Some("My Set".into()),
+            last, clock: None }
+    }
+
     #[test]
     fn render_draws_divider_and_regions() {
-        let m = LcdModel {
-            mode: Mode::Active,
-            slot: MKey::M2,
-            profile_name: Some("Media".to_string()),
-            last: Some(LastAction {
-                button: "G12".to_string(),
-                combo: Some("ctrl+c".to_string()),
-                label: Some("Copy".to_string()),
-            }),
-        };
-        let fb = render(&m);
+        let mut m = model(Some(LastAction {
+            button: "G12".to_string(),
+            combo: Some("ctrl+c".to_string()),
+            label: Some("Copy".to_string()),
+        }));
+        m.display_name = Some("Media".to_string());
+        let fb = render(&m, &LcdConfig::default());
         // title band (top ~8px) has content
         assert!(any_pixel_in_row_band(&fb, 0, 8));
         // divider row present around y=9
@@ -476,12 +521,48 @@ mod tests {
         let m = LcdModel {
             mode: Mode::DryRun,
             slot: MKey::M3,
-            profile_name: None,
+            filename: None,
+            display_name: None,
             last: None,
+            clock: None,
         };
-        let fb = render(&m); // must not panic; renders "(empty)" and blank action line
+        let fb = render(&m, &LcdConfig::default()); // must not panic; renders "(empty)" and blank action line
         assert!(any_pixel_in_row_band(&fb, 12, 27)); // still shows slot + (empty)
         assert!(!any_pixel_in_row_band(&fb, 30, 40)); // no last action -> blank
+    }
+
+    #[test]
+    fn render_line1_version_and_clock() {
+        let mut cfg = LcdConfig::default();
+        cfg.line1_left = Line1Left::Version;
+        cfg.line1_clock = true;
+        let mut m = model(None); m.clock = Some("12:34".into());
+        let fb = render(&m, &cfg); // must not panic; title band has content
+        assert!((0..LCD_W).any(|x| (0..8).any(|y| fb.get(x, y))));
+    }
+
+    #[test]
+    fn render_line2_display_and_sanitize() {
+        let mut cfg = LcdConfig::default();
+        cfg.line2_source = Line2Source::Display;
+        let mut m = model(None); m.display_name = Some("Ünïcode".into());
+        let fb = render(&m, &cfg); // non-ASCII replaced by '*', no panic
+        assert!((0..LCD_W).any(|x| (12..27).any(|y| fb.get(x, y))));
+    }
+
+    #[test]
+    fn render_line3_flags() {
+        let last = Some(LastAction { button: "G1".into(), combo: Some("ctrl+c".into()), label: Some("Copy".into()) });
+        let mut cfg = LcdConfig::default();
+        cfg.line3_mapping = false; cfg.line3_label = false;
+        let fb = render(&model(last), &cfg); // only the button shows; no panic
+        assert!((0..LCD_W).any(|x| (30..40).any(|y| fb.get(x, y))));
+    }
+
+    #[test]
+    fn sanitize_replaces_non_ascii() {
+        assert_eq!(sanitize("aé1"), "a*1");
+        assert_eq!(sanitize("ok"), "ok");
     }
 
     #[test]
