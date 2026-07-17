@@ -379,15 +379,36 @@ impl JoystickMapper {
 }
 ```
 
-- [ ] **Step 3: Run tests (GREEN)**
+- [ ] **Step 3: Keep the crate compiling — update `dispatcher.rs::apply`**
 
-Run: `cargo test joystick::`
+Changing `HoldAction`'s variant shape breaks `dispatcher.rs::apply` (it matches the old tuple variants), so the whole crate won't build until it's updated. Change `apply`'s match arms to the struct variants, ignoring `dir` for now (repeat logic comes in Task 4):
+
+```rust
+    fn apply(&self, actions: Vec<HoldAction>) {
+        for action in actions {
+            log::debug!("joystick {action:?}");
+            let result = match &action {
+                HoldAction::KeyDown { key, .. } => self.injector.key_down(key),
+                HoldAction::KeyUp { key, .. } => self.injector.key_up(key),
+            };
+            if let Err(e) = result {
+                log::warn!("joystick injection failed for {action:?}: {e:#}");
+            }
+        }
+    }
+```
+
+`handle_joystick` still calls `self.apply(actions)` for now (Task 4 rewrites it to add repeat). This keeps behavior identical — just the new variant shape.
+
+- [ ] **Step 4: Run tests (GREEN)**
+
+Run: `cargo test joystick::` then `cargo test` (whole crate must compile + pass)
 Expected: PASS.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
-git add src/joystick.rs
+git add src/joystick.rs src/dispatcher.rs
 git commit -m "feat(joystick): mapper reports which direction fired"
 ```
 
@@ -501,7 +522,7 @@ Rewrite `handle_joystick` to register/deregister repeats (snapshot repeat flags 
     }
 ```
 
-Update `apply` (used only by `release_joystick`/`release_all` now — it still receives `HoldAction`): change its match arms to the struct variants (`HoldAction::KeyDown { key, .. } => self.injector.key_down(key)`, `KeyUp { key, .. } => self.injector.key_up(key)`).
+`apply` was already updated to the struct-variant shape in Task 3 and is now used only by `release_joystick` (`handle_joystick` above no longer calls it) — leave it as-is.
 
 In `release_joystick`, after `self.apply(actions);` add `self.joystick_held.clear();`.
 
