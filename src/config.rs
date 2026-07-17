@@ -385,6 +385,24 @@ struct RawBacklight {
 }
 
 #[derive(Debug, Deserialize)]
+struct RawLcd {
+    #[serde(default)]
+    line1_left: Option<String>,
+    #[serde(default)]
+    line1_clock: Option<bool>,
+    #[serde(default)]
+    line1_mode: Option<String>,
+    #[serde(default)]
+    line2_source: Option<String>,
+    #[serde(default)]
+    line3_trigger: Option<String>,
+    #[serde(default)]
+    line3_mapping: Option<bool>,
+    #[serde(default)]
+    line3_label: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
 struct RawManifest {
     profiles_dir: Option<String>,
     m1: Option<String>,
@@ -398,6 +416,8 @@ struct RawManifest {
     joystick: Option<RawManifestJoystick>,
     #[serde(default)]
     backlight: Option<RawBacklight>,
+    #[serde(default)]
+    lcd: Option<RawLcd>,
 }
 
 /// The loaded profiles plus which M-key is active. Replaces a bare `Profile`
@@ -419,6 +439,7 @@ pub struct ProfileSet {
     config_path: PathBuf,
     start_active: bool,
     backlight: crate::led::BacklightConfig,
+    lcd: crate::lcd::LcdConfig,
 }
 
 impl ProfileSet {
@@ -454,6 +475,41 @@ impl ProfileSet {
                 slot_colors: [parse(b.m1_color), parse(b.m2_color), parse(b.m3_color)],
             }
         }).unwrap_or_default();
+        let lcd = raw.lcd.map(|l| {
+            use crate::lcd::{LcdConfig, Line1Left, ModeDisplay, Line2Source, Line3Trigger};
+            let d = LcdConfig::default();
+            // Present-but-unparseable enum values fall back to the default and warn;
+            // an absent field falls back silently.
+            LcdConfig {
+                line1_left: l.line1_left.map(|v| {
+                    Line1Left::parse(&v).unwrap_or_else(|| {
+                        log::warn!("invalid [lcd] line1_left {v:?}; using default");
+                        d.line1_left
+                    })
+                }).unwrap_or(d.line1_left),
+                line1_clock: l.line1_clock.unwrap_or(d.line1_clock),
+                line1_mode: l.line1_mode.map(|v| {
+                    ModeDisplay::parse(&v).unwrap_or_else(|| {
+                        log::warn!("invalid [lcd] line1_mode {v:?}; using default");
+                        d.line1_mode
+                    })
+                }).unwrap_or(d.line1_mode),
+                line2_source: l.line2_source.map(|v| {
+                    Line2Source::parse(&v).unwrap_or_else(|| {
+                        log::warn!("invalid [lcd] line2_source {v:?}; using default");
+                        d.line2_source
+                    })
+                }).unwrap_or(d.line2_source),
+                line3_trigger: l.line3_trigger.map(|v| {
+                    Line3Trigger::parse(&v).unwrap_or_else(|| {
+                        log::warn!("invalid [lcd] line3_trigger {v:?}; using default");
+                        d.line3_trigger
+                    })
+                }).unwrap_or(d.line3_trigger),
+                line3_mapping: l.line3_mapping.unwrap_or(d.line3_mapping),
+                line3_label: l.line3_label.unwrap_or(d.line3_label),
+            }
+        }).unwrap_or_default();
 
         // Manifest mode when ANY of profiles_dir/m1/m2/m3 is present.
         let is_manifest = raw.profiles_dir.is_some() || raw.m1.is_some()
@@ -484,6 +540,7 @@ impl ProfileSet {
                 config_path: config_path.to_path_buf(),
                 start_active,
                 backlight,
+                lcd,
             })
         } else {
             // Legacy: the file itself is a single M1 profile.
@@ -499,6 +556,7 @@ impl ProfileSet {
                 config_path: config_path.to_path_buf(),
                 start_active,
                 backlight,
+                lcd,
             })
         }
     }
@@ -529,6 +587,8 @@ impl ProfileSet {
     }
 
     pub fn backlight_config(&self) -> crate::led::BacklightConfig { self.backlight }
+
+    pub fn lcd_config(&self) -> crate::lcd::LcdConfig { self.lcd }
 
     /// The LED state the hardware should show for the current active slot + config.
     pub fn desired_led_state(&self) -> crate::led::LedState {
@@ -1101,6 +1161,55 @@ mod profileset_tests {
         // active is M1 by default, default color white, indicator on -> mkeys = 1
         assert_eq!(set.desired_led_state(),
             crate::led::LedState { rgb: (255, 255, 255), mkeys: 1 });
+    }
+
+    #[test]
+    fn lcd_section_parses() {
+        let d = std::env::temp_dir().join("g13-cfg-lcd");
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("profiles")).unwrap();
+        std::fs::write(d.join("profiles/basic.toml"), "[keys]\nG1 = \"a\"\n").unwrap();
+        std::fs::write(d.join("config.toml"),
+            "profiles_dir = \"profiles\"\nm1 = \"basic.toml\"\n\
+             [lcd]\nline1_left = \"version\"\nline1_clock = true\nline1_mode = \"off\"\n\
+             line2_source = \"display\"\nline3_trigger = \"held\"\nline3_mapping = false\n").unwrap();
+
+        let set = ProfileSet::load(&d.join("config.toml")).unwrap();
+        let l = set.lcd_config();
+        assert_eq!(l.line1_left, crate::lcd::Line1Left::Version);
+        assert!(l.line1_clock);
+        assert_eq!(l.line1_mode, crate::lcd::ModeDisplay::Off);
+        assert_eq!(l.line2_source, crate::lcd::Line2Source::Display);
+        assert_eq!(l.line3_trigger, crate::lcd::Line3Trigger::Held);
+        assert!(!l.line3_mapping);
+        assert!(l.line3_label); // not set in the manifest -> default (true)
+    }
+
+    #[test]
+    fn missing_lcd_section_uses_defaults() {
+        let d = std::env::temp_dir().join("g13-cfg-nolcd");
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("profiles")).unwrap();
+        std::fs::write(d.join("profiles/basic.toml"), "[keys]\nG1 = \"a\"\n").unwrap();
+        std::fs::write(d.join("config.toml"),
+            "profiles_dir = \"profiles\"\nm1 = \"basic.toml\"\n").unwrap();
+
+        let set = ProfileSet::load(&d.join("config.toml")).unwrap();
+        assert_eq!(set.lcd_config(), crate::lcd::LcdConfig::default());
+    }
+
+    #[test]
+    fn bad_lcd_enum_falls_back() {
+        let d = std::env::temp_dir().join("g13-cfg-badlcd");
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("profiles")).unwrap();
+        std::fs::write(d.join("profiles/basic.toml"), "[keys]\nG1 = \"a\"\n").unwrap();
+        std::fs::write(d.join("config.toml"),
+            "profiles_dir = \"profiles\"\nm1 = \"basic.toml\"\n\
+             [lcd]\nline1_mode = \"bogus\"\n").unwrap();
+
+        let set = ProfileSet::load(&d.join("config.toml")).unwrap();
+        assert_eq!(set.lcd_config().line1_mode, crate::lcd::ModeDisplay::Label);
     }
 
     #[test]
