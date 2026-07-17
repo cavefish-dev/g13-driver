@@ -1,9 +1,9 @@
-use crate::config::JoystickConfig;
+use crate::config::{JoystickConfig, JoystickDir};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HoldAction {
-    KeyDown(String),
-    KeyUp(String),
+    KeyDown { dir: JoystickDir, key: String },
+    KeyUp { dir: JoystickDir, key: String },
 }
 
 /// Converts analog joystick X/Y into key-hold transitions using independent
@@ -11,8 +11,8 @@ pub enum HoldAction {
 /// current held-key state; deadzone and key bindings are read from the config
 /// passed to `update`, so config hot-reload takes effect live.
 pub struct JoystickMapper {
-    x_held: Option<String>,
-    y_held: Option<String>,
+    x_held: Option<(JoystickDir, String)>,
+    y_held: Option<(JoystickDir, String)>,
 }
 
 const CENTER: i32 = 127;
@@ -24,43 +24,44 @@ impl JoystickMapper {
 
     pub fn update(&mut self, x: u8, y: u8, cfg: &JoystickConfig, deadzone: u8) -> Vec<HoldAction> {
         let mut actions = Vec::new();
-        let want_x = Self::target(x, deadzone, &cfg.left, &cfg.right);
+        let want_x = Self::target(x, deadzone, (JoystickDir::Left, &cfg.left), (JoystickDir::Right, &cfg.right));
         Self::diff(&mut actions, &mut self.x_held, want_x);
-        let want_y = Self::target(y, deadzone, &cfg.up, &cfg.down);
+        let want_y = Self::target(y, deadzone, (JoystickDir::Up, &cfg.up), (JoystickDir::Down, &cfg.down));
         Self::diff(&mut actions, &mut self.y_held, want_y);
         actions
     }
 
     pub fn release_all(&mut self) -> Vec<HoldAction> {
         let mut actions = Vec::new();
-        if let Some(k) = self.x_held.take() { actions.push(HoldAction::KeyUp(k)); }
-        if let Some(k) = self.y_held.take() { actions.push(HoldAction::KeyUp(k)); }
+        if let Some((dir, key)) = self.x_held.take() { actions.push(HoldAction::KeyUp { dir, key }); }
+        if let Some((dir, key)) = self.y_held.take() { actions.push(HoldAction::KeyUp { dir, key }); }
         actions
     }
 
-    /// Which key (if any) a single axis wants held, given its low/high targets.
-    fn target(value: u8, deadzone: u8, low: &Option<String>, high: &Option<String>) -> Option<String> {
+    /// Which (direction, key) (if any) a single axis wants held, given its low/high targets.
+    fn target(value: u8, deadzone: u8, low: (JoystickDir, &Option<String>), high: (JoystickDir, &Option<String>))
+        -> Option<(JoystickDir, String)> {
         let v = value as i32;
         let dz = deadzone as i32;
         if v < CENTER - dz {
-            low.clone()
+            low.1.clone().map(|k| (low.0, k))
         } else if v > CENTER + dz {
-            high.clone()
+            high.1.clone().map(|k| (high.0, k))
         } else {
             None
         }
     }
 
     /// Emit transitions to move one axis from its current held key to `want`.
-    fn diff(actions: &mut Vec<HoldAction>, held: &mut Option<String>, want: Option<String>) {
+    fn diff(actions: &mut Vec<HoldAction>, held: &mut Option<(JoystickDir, String)>, want: Option<(JoystickDir, String)>) {
         if *held == want {
             return;
         }
-        if let Some(k) = held.take() {
-            actions.push(HoldAction::KeyUp(k));
+        if let Some((dir, key)) = held.take() {
+            actions.push(HoldAction::KeyUp { dir, key });
         }
-        if let Some(k) = &want {
-            actions.push(HoldAction::KeyDown(k.clone()));
+        if let Some((dir, key)) = &want {
+            actions.push(HoldAction::KeyDown { dir: *dir, key: key.clone() });
         }
         *held = want;
     }
@@ -69,7 +70,7 @@ impl JoystickMapper {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::JoystickConfig;
+    use crate::config::{JoystickConfig, JoystickDir};
 
     fn wasd() -> JoystickConfig {
         JoystickConfig {
@@ -96,40 +97,45 @@ mod tests {
     #[test]
     fn full_left_presses_a() {
         let mut m = JoystickMapper::new();
-        assert_eq!(m.update(0, 127, &wasd(), 30), vec![HoldAction::KeyDown("a".into())]);
+        assert_eq!(m.update(0, 127, &wasd(), 30),
+            vec![HoldAction::KeyDown { dir: JoystickDir::Left, key: "a".into() }]);
     }
 
     #[test]
     fn full_right_presses_d() {
         let mut m = JoystickMapper::new();
-        assert_eq!(m.update(255, 127, &wasd(), 30), vec![HoldAction::KeyDown("d".into())]);
+        assert_eq!(m.update(255, 127, &wasd(), 30),
+            vec![HoldAction::KeyDown { dir: JoystickDir::Right, key: "d".into() }]);
     }
 
     #[test]
     fn full_up_presses_w() {
         let mut m = JoystickMapper::new();
-        assert_eq!(m.update(127, 0, &wasd(), 30), vec![HoldAction::KeyDown("w".into())]);
+        assert_eq!(m.update(127, 0, &wasd(), 30),
+            vec![HoldAction::KeyDown { dir: JoystickDir::Up, key: "w".into() }]);
     }
 
     #[test]
     fn full_down_presses_s() {
         let mut m = JoystickMapper::new();
-        assert_eq!(m.update(127, 255, &wasd(), 30), vec![HoldAction::KeyDown("s".into())]);
+        assert_eq!(m.update(127, 255, &wasd(), 30),
+            vec![HoldAction::KeyDown { dir: JoystickDir::Down, key: "s".into() }]);
     }
 
     #[test]
     fn return_to_center_releases() {
         let mut m = JoystickMapper::new();
         m.update(0, 127, &wasd(), 30);                    // hold a
-        assert_eq!(m.update(127, 127, &wasd(), 30), vec![HoldAction::KeyUp("a".into())]);
+        assert_eq!(m.update(127, 127, &wasd(), 30),
+            vec![HoldAction::KeyUp { dir: JoystickDir::Left, key: "a".into() }]);
     }
 
     #[test]
     fn diagonal_holds_two_keys() {
         let mut m = JoystickMapper::new();
         let actions = m.update(0, 0, &wasd(), 30);        // up-left
-        assert!(actions.contains(&HoldAction::KeyDown("a".into())));
-        assert!(actions.contains(&HoldAction::KeyDown("w".into())));
+        assert!(actions.contains(&HoldAction::KeyDown { dir: JoystickDir::Left, key: "a".into() }));
+        assert!(actions.contains(&HoldAction::KeyDown { dir: JoystickDir::Up, key: "w".into() }));
         assert_eq!(actions.len(), 2);
     }
 
@@ -139,8 +145,8 @@ mod tests {
         m.update(0, 127, &wasd(), 30);                    // hold a
         let actions = m.update(255, 127, &wasd(), 30);    // jump full right
         assert_eq!(actions, vec![
-            HoldAction::KeyUp("a".into()),
-            HoldAction::KeyDown("d".into()),
+            HoldAction::KeyUp { dir: JoystickDir::Left, key: "a".into() },
+            HoldAction::KeyDown { dir: JoystickDir::Right, key: "d".into() },
         ]);
     }
 
@@ -158,8 +164,8 @@ mod tests {
         let mut released = m.release_all();
         released.sort_by(|x, y| format!("{:?}", x).cmp(&format!("{:?}", y)));
         assert_eq!(released, vec![
-            HoldAction::KeyUp("a".into()),
-            HoldAction::KeyUp("w".into()),
+            HoldAction::KeyUp { dir: JoystickDir::Left, key: "a".into() },
+            HoldAction::KeyUp { dir: JoystickDir::Up, key: "w".into() },
         ]);
         assert!(m.release_all().is_empty());            // second call: nothing
     }

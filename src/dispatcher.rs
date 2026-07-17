@@ -151,8 +151,8 @@ impl Dispatcher {
         for action in actions {
             log::debug!("joystick {action:?}");
             let result = match &action {
-                HoldAction::KeyDown(k) => self.injector.key_down(k),
-                HoldAction::KeyUp(k) => self.injector.key_up(k),
+                HoldAction::KeyDown { key, .. } => self.injector.key_down(key),
+                HoldAction::KeyUp { key, .. } => self.injector.key_up(key),
             };
             if let Err(e) = result {
                 log::warn!("joystick injection failed for {action:?}: {e:#}");
