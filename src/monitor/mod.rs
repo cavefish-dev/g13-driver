@@ -1114,7 +1114,10 @@ impl MonitorApp {
                     let joystick = if jc.up.is_some() || jc.down.is_some() || jc.left.is_some() || jc.right.is_some() {
                         Some(jc)
                     } else { None };
-                    match self.profiles.write().unwrap().save_active_bindings(bindings, repeat, labels, joystick) {
+                    // STOPGAP: joystick label/repeat edits aren't wired into the GUI yet
+                    // (Task 5 fleshes this out); pass empty maps so nothing is lost on save.
+                    match self.profiles.write().unwrap().save_active_bindings(
+                        bindings, repeat, labels, joystick, HashMap::new(), HashMap::new()) {
                         Ok(()) => self.save_status = Some("saved".to_string()),
                         Err(e) => {
                             log::warn!("save failed: {e:#}");

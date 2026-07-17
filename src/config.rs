@@ -284,6 +284,13 @@ impl Profile {
         self.joystick_repeat.get(&dir).copied().unwrap_or(false)
     }
 
+    pub fn set_joystick_labels(&mut self, m: HashMap<JoystickDir, String>) {
+        self.joystick_labels = m;
+    }
+    pub fn set_joystick_repeat(&mut self, m: HashMap<JoystickDir, bool>) {
+        self.joystick_repeat = m;
+    }
+
     /// Serialize this profile back to TOML (keys + joystick + repeat). Comments in the
     /// original file are not preserved (the file becomes GUI-managed).
     pub fn to_toml(&self) -> Result<String> {
@@ -299,8 +306,20 @@ impl Profile {
                 down: j.down.clone(),
                 left: j.left.clone(),
                 right: j.right.clone(),
-                labels: None,
-                repeat: None,
+                labels: {
+                    let m: std::collections::HashMap<String, String> = self.joystick_labels.iter()
+                        .filter(|(_, v)| !v.trim().is_empty())
+                        .map(|(d, v)| (d.as_str().to_string(), v.clone()))
+                        .collect();
+                    if m.is_empty() { None } else { Some(m) }
+                },
+                repeat: {
+                    let m: std::collections::HashMap<String, bool> = self.joystick_repeat.iter()
+                        .filter(|(_, &v)| v)
+                        .map(|(d, _)| (d.as_str().to_string(), true))
+                        .collect();
+                    if m.is_empty() { None } else { Some(m) }
+                },
             });
         let repeat: HashMap<String, bool> = self.repeat.iter()
             .filter(|(_, &v)| v)
@@ -680,6 +699,8 @@ impl ProfileSet {
         repeat: HashMap<G13Key, bool>,
         labels: HashMap<G13Key, String>,
         joystick: Option<JoystickConfig>,
+        joystick_labels: HashMap<JoystickDir, String>,
+        joystick_repeat: HashMap<JoystickDir, bool>,
     ) -> Result<()> {
         if self.active_name().is_none() || self.active_profile().is_none() {
             anyhow::bail!("no profile in the active slot");
@@ -690,6 +711,8 @@ impl ProfileSet {
         profile.set_repeat(repeat);
         profile.set_labels(labels);
         profile.set_joystick(joystick);
+        profile.set_joystick_labels(joystick_labels);
+        profile.set_joystick_repeat(joystick_repeat);
         if profile.source() == ProfileSource::Github {
             profile.set_modified(true);
         }
@@ -843,7 +866,7 @@ mod profileset_tests {
         b.insert(G13Key::G1, "ctrl+c".to_string());
         let mut labels = HashMap::new();
         labels.insert(G13Key::G1, "Copy".to_string());
-        set.save_active_bindings(b, HashMap::new(), labels, None).unwrap();
+        set.save_active_bindings(b, HashMap::new(), labels, None, HashMap::new(), HashMap::new()).unwrap();
         let text = std::fs::read_to_string(d.join("profiles/p.toml")).unwrap();
         assert!(text.contains("[labels]"));
         assert!(text.contains("Copy"));
@@ -860,7 +883,7 @@ mod profileset_tests {
         let mut set = ProfileSet::load(&d.join("config.toml")).unwrap();
         let joy = Some(JoystickConfig { up: Some("w".into()), down: Some("s".into()),
                                         left: Some("a".into()), right: Some("d".into()) });
-        set.save_active_bindings(HashMap::new(), HashMap::new(), HashMap::new(), joy).unwrap();
+        set.save_active_bindings(HashMap::new(), HashMap::new(), HashMap::new(), joy, HashMap::new(), HashMap::new()).unwrap();
         let text = std::fs::read_to_string(d.join("profiles/p.toml")).unwrap();
         assert!(text.contains("[joystick]"));
         assert!(text.contains("up = \"w\""));
@@ -878,7 +901,7 @@ mod profileset_tests {
         let mut b = HashMap::new();
         b.insert(G13Key::G1, "ctrl+a".to_string());
         b.insert(G13Key::G2, "f1".to_string());
-        set.save_active_bindings(b, HashMap::new(), HashMap::new(), None).unwrap();
+        set.save_active_bindings(b, HashMap::new(), HashMap::new(), None, HashMap::new(), HashMap::new()).unwrap();
 
         // Fresh load from disk reflects the change; passing None clears joystick; game untouched.
         let reloaded = ProfileSet::load(&d.join("config.toml")).unwrap();
@@ -993,7 +1016,7 @@ mod profileset_tests {
         let mut set = ProfileSet::load(&d.join("config.toml")).unwrap();
         let mut b = HashMap::new();
         b.insert(G13Key::G1, "ctrl+c".to_string());
-        set.save_active_bindings(b, HashMap::new(), HashMap::new(), None).unwrap();
+        set.save_active_bindings(b, HashMap::new(), HashMap::new(), None, HashMap::new(), HashMap::new()).unwrap();
         let text = std::fs::read_to_string(d.join("profiles/g.toml")).unwrap();
         assert!(text.contains("modified = true"), "github profile flips modified on save");
         assert!(text.contains("source = \"github\""), "source preserved");
@@ -1007,7 +1030,7 @@ mod profileset_tests {
         let mut set = ProfileSet::load(&d.join("config.toml")).unwrap();
         let mut b = HashMap::new();
         b.insert(G13Key::G1, "ctrl+c".to_string());
-        set.save_active_bindings(b, HashMap::new(), HashMap::new(), None).unwrap();
+        set.save_active_bindings(b, HashMap::new(), HashMap::new(), None, HashMap::new(), HashMap::new()).unwrap();
         let text = std::fs::read_to_string(d.join("profiles/u.toml")).unwrap();
         assert!(!text.contains("modified"), "user profile stays clean");
         assert!(!text.contains("source"), "user profile stays clean");
@@ -1532,5 +1555,24 @@ G3 = "f5"
         let raw: RawConfig = toml::from_str(
             "[joystick]\nup = \"w\"\n[joystick.labels]\ndiagonal = \"x\"\n").unwrap();
         assert!(Profile::from_raw(raw).is_err());
+    }
+
+    #[test]
+    fn joystick_labels_repeat_round_trip_to_toml() {
+        let raw: RawConfig = toml::from_str("[joystick]\nup = \"w\"\ndown = \"s\"\n").unwrap();
+        let mut p = Profile::from_raw(raw).unwrap();
+        let mut labels = HashMap::new();
+        labels.insert(JoystickDir::Up, "Forward".to_string());
+        let mut repeat = HashMap::new();
+        repeat.insert(JoystickDir::Down, true);
+        p.set_joystick_labels(labels);
+        p.set_joystick_repeat(repeat);
+
+        let toml = p.to_toml().unwrap();
+        let reloaded = Profile::from_raw(toml::from_str(&toml).unwrap()).unwrap();
+        assert_eq!(reloaded.joystick_label(JoystickDir::Up), Some("Forward"));
+        assert!(reloaded.joystick_repeats(JoystickDir::Down));
+        assert!(toml.contains("[joystick.labels]"));
+        assert!(toml.contains("[joystick.repeat]"));
     }
 }
