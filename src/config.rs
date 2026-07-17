@@ -590,6 +590,28 @@ impl ProfileSet {
 
     pub fn lcd_config(&self) -> crate::lcd::LcdConfig { self.lcd }
 
+    pub fn set_lcd_line1_left(&mut self, v: crate::lcd::Line1Left) {
+        self.lcd.line1_left = v;
+    }
+    pub fn set_lcd_line1_clock(&mut self, v: bool) {
+        self.lcd.line1_clock = v;
+    }
+    pub fn set_lcd_line1_mode(&mut self, v: crate::lcd::ModeDisplay) {
+        self.lcd.line1_mode = v;
+    }
+    pub fn set_lcd_line2_source(&mut self, v: crate::lcd::Line2Source) {
+        self.lcd.line2_source = v;
+    }
+    pub fn set_lcd_line3_trigger(&mut self, v: crate::lcd::Line3Trigger) {
+        self.lcd.line3_trigger = v;
+    }
+    pub fn set_lcd_line3_mapping(&mut self, v: bool) {
+        self.lcd.line3_mapping = v;
+    }
+    pub fn set_lcd_line3_label(&mut self, v: bool) {
+        self.lcd.line3_label = v;
+    }
+
     /// The LED state the hardware should show for the current active slot + config.
     pub fn desired_led_state(&self) -> crate::led::LedState {
         crate::led::resolve(self.active, &self.backlight)
@@ -675,6 +697,30 @@ impl ProfileSet {
                 }
             }
         }
+        std::fs::write(&self.config_path, doc.to_string())
+            .with_context(|| format!("failed to write {}", self.config_path.display()))?;
+        Ok(())
+    }
+
+    /// Write the whole `[lcd]` table into the manifest, preserving every other
+    /// key and comment (format-preserving via toml_edit). Best-effort; callers log on error.
+    pub fn persist_lcd(&self) -> Result<()> {
+        use toml_edit::{DocumentMut, Item, Table, value as toml_value};
+        let text = std::fs::read_to_string(&self.config_path)
+            .with_context(|| format!("failed to read {}", self.config_path.display()))?;
+        let mut doc = text.parse::<DocumentMut>()
+            .with_context(|| format!("failed to parse {}", self.config_path.display()))?;
+        if !doc.as_table().contains_key("lcd") {
+            doc.as_table_mut().insert("lcd", Item::Table(Table::new()));
+        }
+        let c = &self.lcd;
+        doc["lcd"]["line1_left"] = toml_value(c.line1_left.as_str());
+        doc["lcd"]["line1_clock"] = toml_value(c.line1_clock);
+        doc["lcd"]["line1_mode"] = toml_value(c.line1_mode.as_str());
+        doc["lcd"]["line2_source"] = toml_value(c.line2_source.as_str());
+        doc["lcd"]["line3_trigger"] = toml_value(c.line3_trigger.as_str());
+        doc["lcd"]["line3_mapping"] = toml_value(c.line3_mapping);
+        doc["lcd"]["line3_label"] = toml_value(c.line3_label);
         std::fs::write(&self.config_path, doc.to_string())
             .with_context(|| format!("failed to write {}", self.config_path.display()))?;
         Ok(())
@@ -1283,6 +1329,43 @@ mod profileset_tests {
 
         let text = std::fs::read_to_string(d.join("config.toml")).unwrap();
         assert!(!text.contains("m1_color"), "m1_color key removed from disk");
+    }
+
+    #[test]
+    fn persist_lcd_round_trips() {
+        use crate::lcd::{Line1Left, ModeDisplay, Line2Source, Line3Trigger};
+        let d = std::env::temp_dir().join("g13-cfg-persistlcd");
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("profiles")).unwrap();
+        std::fs::write(d.join("profiles/basic.toml"), "[keys]\nG1 = \"a\"\n").unwrap();
+        std::fs::write(d.join("config.toml"),
+            "profiles_dir = \"profiles\"\nm1 = \"basic.toml\"\n").unwrap();
+
+        let mut set = ProfileSet::load(&d.join("config.toml")).unwrap();
+        set.set_lcd_line1_left(Line1Left::Version);
+        set.set_lcd_line1_clock(true);
+        set.set_lcd_line1_mode(ModeDisplay::Off);
+        set.set_lcd_line2_source(Line2Source::Display);
+        set.set_lcd_line3_trigger(Line3Trigger::Held);
+        set.set_lcd_line3_mapping(false);
+        set.set_lcd_line3_label(false);
+        set.persist_lcd().unwrap();
+
+        // Reload from disk and confirm the values survived.
+        let reloaded = ProfileSet::load(&d.join("config.toml")).unwrap();
+        let l = reloaded.lcd_config();
+        assert_eq!(l.line1_left, Line1Left::Version);
+        assert!(l.line1_clock);
+        assert_eq!(l.line1_mode, ModeDisplay::Off);
+        assert_eq!(l.line2_source, Line2Source::Display);
+        assert_eq!(l.line3_trigger, Line3Trigger::Held);
+        assert!(!l.line3_mapping);
+        assert!(!l.line3_label);
+
+        // Original manifest keys are preserved, and the [lcd] table is present.
+        let text = std::fs::read_to_string(d.join("config.toml")).unwrap();
+        assert!(text.contains("m1 = \"basic.toml\""));
+        assert!(text.contains("[lcd]"));
     }
 
     #[test]
