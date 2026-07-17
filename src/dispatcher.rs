@@ -17,11 +17,20 @@ struct HeldKey {
     next_repeat: Option<Instant>, // None until the first tick schedules it
 }
 
+/// A currently-held joystick direction plus its auto-repeat schedule.
+struct JoyHeld {
+    key: String,
+    delay_ms: u64,
+    interval_ms: u64,
+    next_repeat: Option<Instant>,
+}
+
 pub struct Dispatcher {
     profiles: Arc<RwLock<ProfileSet>>,
     injector: Box<dyn KeyInjector>,
     joystick: JoystickMapper,
     held_keys: HashMap<G13Key, HeldKey>,
+    joystick_held: HashMap<crate::config::JoystickDir, JoyHeld>,
     tap_only: HashSet<String>,
 }
 
@@ -32,6 +41,7 @@ impl Dispatcher {
             injector,
             joystick: JoystickMapper::new(),
             held_keys: HashMap::new(),
+            joystick_held: HashMap::new(),
             tap_only: tap_only_keys(),
         }
     }
@@ -115,6 +125,18 @@ impl Dispatcher {
                 }
             }
         }
+        for held in self.joystick_held.values_mut() {
+            match held.next_repeat {
+                None => held.next_repeat = Some(now + Duration::from_millis(held.delay_ms)),
+                Some(mut due) => {
+                    while now >= due {
+                        to_fire.push(held.key.clone());
+                        due += Duration::from_millis(held.interval_ms);
+                    }
+                    held.next_repeat = Some(due);
+                }
+            }
+        }
         for key in to_fire {
             if let Err(e) = self.injector.key_down(&key) {
                 log::warn!("auto-repeat injection failed: {e:#}");
@@ -123,17 +145,42 @@ impl Dispatcher {
     }
 
     fn handle_joystick(&mut self, x: u8, y: u8) {
-        // Snapshot the active profile's joystick directions + the global deadzone under
-        // a short read lock, then drop the guard before we touch the injector.
-        let (cfg, deadzone) = {
+        // Snapshot the active profile's joystick directions, the global deadzone, and the
+        // autorepeat timing under a short read lock, then drop the guard before we touch
+        // the injector.
+        let (cfg, deadzone, ar) = {
             let set = self.profiles.read().unwrap();
-            (set.active_profile().and_then(|p| p.joystick()).cloned(), set.joystick_deadzone())
+            (set.active_profile().and_then(|p| p.joystick()).cloned(),
+             set.joystick_deadzone(), set.autorepeat())
         };
         let actions = match &cfg {
             Some(jc) => self.joystick.update(x, y, jc, deadzone),
             None => Vec::new(),
         };
-        self.apply(actions);
+        for action in actions {
+            match action {
+                HoldAction::KeyDown { dir, key } => {
+                    if let Err(e) = self.injector.key_down(&key) {
+                        log::warn!("joystick injection failed: {e:#}");
+                    }
+                    let repeats = {
+                        let set = self.profiles.read().unwrap();
+                        set.active_profile().map(|p| p.joystick_repeats(dir)).unwrap_or(false)
+                    };
+                    if repeats {
+                        self.joystick_held.insert(dir, JoyHeld {
+                            key, delay_ms: ar.delay_ms, interval_ms: ar.interval_ms, next_repeat: None,
+                        });
+                    }
+                }
+                HoldAction::KeyUp { dir, key } => {
+                    if let Err(e) = self.injector.key_up(&key) {
+                        log::warn!("joystick injection failed: {e:#}");
+                    }
+                    self.joystick_held.remove(&dir);
+                }
+            }
+        }
     }
 
     /// Switch profile on M1/M2/M3. Release held joystick keys first (a new profile
@@ -163,6 +210,7 @@ impl Dispatcher {
     fn release_joystick(&mut self) {
         let actions = self.joystick.release_all();
         self.apply(actions);
+        self.joystick_held.clear();
     }
 
     /// Release everything held — the joystick and all held G-key combos. Call on
@@ -528,5 +576,38 @@ mod tests {
         holds.lock().unwrap().clear();
         d.tick(t0 + Duration::from_millis(300)); // released -> no more
         assert!(holds.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn joystick_repeat_refires_on_tick() {
+        let d = tmp("joyrep");
+        std::fs::create_dir_all(&d).unwrap();
+        write(&d.join("config.toml"),
+            "[keys]\n[joystick]\nup = \"w\"\ndown = \"s\"\n\
+             [joystick.repeat]\nup = true\n\
+             [autorepeat]\ndelay_ms = 0\ninterval_ms = 1\n");
+        let config = Arc::new(RwLock::new(ProfileSet::load(&d.join("config.toml")).unwrap()));
+        let (injector, holds) = MockInjector::new_with_holds();
+        let mut disp = Dispatcher::new(config, Box::new(injector));
+
+        // Full up -> key_down("w") once; repeat registered for Up.
+        disp.handle(G13Event::JoystickMove { x: 127, y: 0 }).unwrap();
+        assert_eq!(holds.lock().unwrap().clone(), vec!["down:w"]);
+
+        // tick past the (zero) delay -> "w" re-fires.
+        let t0 = Instant::now();
+        disp.tick(t0);                              // schedules next_repeat
+        disp.tick(t0 + Duration::from_millis(5));   // fires repeats
+        assert!(holds.lock().unwrap().iter().filter(|k| *k == "down:w").count() >= 2,
+            "up should auto-repeat: {:?}", holds.lock().unwrap());
+
+        // Move to full down: Up releases (repeat entry cleared), Down has no repeat.
+        holds.lock().unwrap().clear();
+        disp.handle(G13Event::JoystickMove { x: 127, y: 255 }).unwrap();
+        // Up releases (records "up:w"), Down presses ("down:s"); the mock records both.
+        assert_eq!(holds.lock().unwrap().clone(), vec!["up:w", "down:s"]);
+        disp.tick(Instant::now() + Duration::from_millis(50));
+        assert_eq!(holds.lock().unwrap().iter().filter(|k| *k == "down:s").count(), 1,
+            "down must not repeat; up must have stopped");
     }
 }
