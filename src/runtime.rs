@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
@@ -45,8 +46,9 @@ pub fn run_headless(config: Arc<RwLock<ProfileSet>>) -> Result<()> {
     crate::led::spawn_poller(config.clone(), desired.clone());
     let lcd_frame = Arc::new(Mutex::new(crate::lcd::Framebuffer::new().pack()));
     let last_action = Arc::new(Mutex::new(None));
-    let lcd_mode = Arc::new(std::sync::atomic::AtomicBool::new(false)); // headless = always Active
-    crate::lcd::spawn_poller(config.clone(), lcd_mode, last_action.clone(), lcd_frame.clone());
+    // Headless starts Active (injecting); MR toggles this at runtime. Not persisted.
+    let dry_run = Arc::new(AtomicBool::new(false));
+    crate::lcd::spawn_poller(config.clone(), dry_run.clone(), last_action.clone(), lcd_frame.clone());
     let desired_sup = desired.clone();
     let lcd_sup = lcd_frame.clone();
     thread::spawn(move || loop {
@@ -63,16 +65,34 @@ pub fn run_headless(config: Arc<RwLock<ProfileSet>>) -> Result<()> {
 
     log::info!("g13-driver running (headless) — press Ctrl+C to stop");
 
+    let mut was_active = true;
     loop {
         match rx.recv_timeout(Duration::from_millis(15)) {
             Ok(event) => {
                 crate::lcd::capture(&event, &config, &last_action);
-                if let Err(e) = dispatcher.handle(event) {
-                    log::warn!("dispatch error: {e:#}");
+                if let G13Event::MKeyDown(crate::protocol::MKey::MR) = event {
+                    dry_run.store(!dry_run.load(Ordering::Relaxed), Ordering::Relaxed);
                 }
+                let active = !dry_run.load(Ordering::Relaxed);
+                if was_active && !active {
+                    dispatcher.release_held();
+                }
+                if active {
+                    if let Err(e) = dispatcher.handle(event) {
+                        log::warn!("dispatch error: {e:#}");
+                    }
+                }
+                was_active = active;
                 dispatcher.tick(Instant::now());
             }
-            Err(RecvTimeoutError::Timeout) => dispatcher.tick(Instant::now()),
+            Err(RecvTimeoutError::Timeout) => {
+                let active = !dry_run.load(Ordering::Relaxed);
+                if was_active && !active {
+                    dispatcher.release_held();
+                }
+                was_active = active;
+                dispatcher.tick(Instant::now());
+            }
             // The supervisor keeps tx alive, so this only fires if it died: exit safely.
             Err(RecvTimeoutError::Disconnected) => break,
         }

@@ -414,6 +414,9 @@ fn consumer_loop(
             Ok(event) => {
                 state.lock().unwrap().apply(&event);
                 crate::lcd::capture(&event, &profiles, &last_action);
+                if let G13Event::MKeyDown(crate::protocol::MKey::MR) = event {
+                    dry_run.store(!dry_run.load(Ordering::Relaxed), Ordering::Relaxed);
+                }
                 let active = !dry_run.load(Ordering::Relaxed);
                 if was_active && !active {
                     dispatcher.release_held();
