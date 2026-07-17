@@ -1,6 +1,6 @@
 # Unify Bindings-tab row style
 
-- **Status:** ongoing
+- **Status:** finished
 - **Target:** v0.2
 - **Updated:** 2026-07-17
 
@@ -15,7 +15,7 @@ matching the preferred joystick layout. Purely visual.
 All Bindings-tab rows look identical (right-aligned name → key → mark → label → repeat);
 no behavior/persistence change.
 
-**Smoke:** all Bindings rows visually identical (right-aligned name → key → mark → label → repeat); edit+save unchanged — confirm in GUI.
+**Smoke PASSED 2026-07-17:** all Bindings rows visually identical (right-aligned name → key → mark → label → repeat); edit+save unchanged.
 
 ## Notes
 - Design: `docs/superpowers/specs/2026-07-17-unify-binding-rows-design.md`.
