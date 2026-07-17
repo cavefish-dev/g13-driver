@@ -1,6 +1,6 @@
 # Unify Bindings-tab row style
 
-- **Status:** open
+- **Status:** ongoing
 - **Target:** v0.2
 - **Updated:** 2026-07-17
 
@@ -9,11 +9,13 @@ One consistent row style for all Bindings-tab mappings (G-keys, thumb, joystick)
 matching the preferred joystick layout. Purely visual.
 
 ## Tasks
-- [ ] Extract `render_mapping_row` (joystick style); rewire G-key/thumb + joystick rows to it.
+- [x] Extract `render_mapping_row` (joystick style); rewire G-key/thumb + joystick rows to it.
 
 ## Acceptance
 All Bindings-tab rows look identical (right-aligned name → key → mark → label → repeat);
 no behavior/persistence change.
+
+**Smoke:** all Bindings rows visually identical (right-aligned name → key → mark → label → repeat); edit+save unchanged — confirm in GUI.
 
 ## Notes
 - Design: `docs/superpowers/specs/2026-07-17-unify-binding-rows-design.md`.
