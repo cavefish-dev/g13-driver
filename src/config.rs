@@ -772,7 +772,7 @@ impl ProfileSet {
 
     /// The active profile's filename without the `.toml` extension (for the LCD).
     pub fn active_name_stem(&self) -> Option<&str> {
-        self.active_name().map(|n| n.trim_end_matches(".toml"))
+        self.active_name().map(|n| n.strip_suffix(".toml").unwrap_or(n))
     }
 
     pub fn profiles_dir(&self) -> &std::path::Path { &self.profiles_dir }

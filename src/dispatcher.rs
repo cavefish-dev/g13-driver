@@ -2,7 +2,7 @@ use anyhow::Result;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
-use crate::config::ProfileSet;
+use crate::config::{JoystickDir, ProfileSet};
 use crate::injector::{KeyCombo, KeyInjector};
 use crate::injector::key_map::tap_only_keys;
 use crate::joystick::{HoldAction, JoystickMapper};
@@ -145,28 +145,39 @@ impl Dispatcher {
     }
 
     fn handle_joystick(&mut self, x: u8, y: u8) {
-        // Snapshot the active profile's joystick directions, the global deadzone, and the
-        // autorepeat timing under a short read lock, then drop the guard before we touch
-        // the injector.
-        let (cfg, deadzone, ar) = {
+        // Snapshot the active profile's joystick directions, the global deadzone, the
+        // autorepeat timing, and the per-direction repeat flags under a short read lock,
+        // then drop the guard before we touch the injector.
+        let (cfg, deadzone, ar, jrepeat) = {
             let set = self.profiles.read().unwrap();
+            let jrepeat: [bool; 4] = set.active_profile().map(|p| [
+                p.joystick_repeats(JoystickDir::Up),
+                p.joystick_repeats(JoystickDir::Down),
+                p.joystick_repeats(JoystickDir::Left),
+                p.joystick_repeats(JoystickDir::Right),
+            ]).unwrap_or([false; 4]);
             (set.active_profile().and_then(|p| p.joystick()).cloned(),
-             set.joystick_deadzone(), set.autorepeat())
+             set.joystick_deadzone(), set.autorepeat(), jrepeat)
         };
         let actions = match &cfg {
             Some(jc) => self.joystick.update(x, y, jc, deadzone),
             None => Vec::new(),
         };
+        fn dir_idx(dir: JoystickDir) -> usize {
+            match dir {
+                JoystickDir::Up => 0,
+                JoystickDir::Down => 1,
+                JoystickDir::Left => 2,
+                JoystickDir::Right => 3,
+            }
+        }
         for action in actions {
             match action {
                 HoldAction::KeyDown { dir, key } => {
                     if let Err(e) = self.injector.key_down(&key) {
                         log::warn!("joystick injection failed: {e:#}");
                     }
-                    let repeats = {
-                        let set = self.profiles.read().unwrap();
-                        set.active_profile().map(|p| p.joystick_repeats(dir)).unwrap_or(false)
-                    };
+                    let repeats = jrepeat[dir_idx(dir)];
                     if repeats {
                         self.joystick_held.insert(dir, JoyHeld {
                             key, delay_ms: ar.delay_ms, interval_ms: ar.interval_ms, next_repeat: None,
