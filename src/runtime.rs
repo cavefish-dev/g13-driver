@@ -42,12 +42,12 @@ pub fn run_headless(config: Arc<RwLock<ProfileSet>>) -> Result<()> {
     // loop's channel never closes in normal operation. Reopens the G13 after a
     // disconnect or a failed open, retrying every 2s.
     let (tx, rx) = mpsc::channel::<G13Event>();
-    let desired = Arc::new(Mutex::new(config.read().unwrap().desired_led_state()));
-    crate::led::spawn_poller(config.clone(), desired.clone());
-    let lcd_frame = Arc::new(Mutex::new(crate::lcd::Framebuffer::new().pack()));
-    let tracker = Arc::new(Mutex::new(crate::lcd::ActivityTracker::new()));
     // Headless starts Active (injecting); MR toggles this at runtime. Not persisted.
     let dry_run = Arc::new(AtomicBool::new(false));
+    let desired = Arc::new(Mutex::new(config.read().unwrap().desired_led_state(dry_run.load(Ordering::Relaxed))));
+    crate::led::spawn_poller(config.clone(), dry_run.clone(), desired.clone());
+    let lcd_frame = Arc::new(Mutex::new(crate::lcd::Framebuffer::new().pack()));
+    let tracker = Arc::new(Mutex::new(crate::lcd::ActivityTracker::new()));
     crate::lcd::spawn_poller(config.clone(), dry_run.clone(), tracker.clone(), lcd_frame.clone());
     let desired_sup = desired.clone();
     let lcd_sup = lcd_frame.clone();

@@ -611,8 +611,9 @@ impl ProfileSet {
     }
 
     /// The LED state the hardware should show for the current active slot + config.
-    pub fn desired_led_state(&self) -> crate::led::LedState {
-        crate::led::resolve(self.active, &self.backlight)
+    /// `dry_run` lights the MR indicator bit alongside the active slot's bit.
+    pub fn desired_led_state(&self, dry_run: bool) -> crate::led::LedState {
+        crate::led::resolve(self.active, dry_run, &self.backlight)
     }
 
     pub fn start_active(&self) -> bool { self.start_active }
@@ -1203,7 +1204,7 @@ mod profileset_tests {
         let set = ProfileSet::load(&d.join("config.toml")).unwrap();
         assert_eq!(set.backlight_config(), crate::led::BacklightConfig::default());
         // active is M1 by default, default color white, indicator on -> mkeys = 1
-        assert_eq!(set.desired_led_state(),
+        assert_eq!(set.desired_led_state(false),
             crate::led::LedState { rgb: (255, 255, 255), mkeys: 1 });
     }
 

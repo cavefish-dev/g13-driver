@@ -363,8 +363,8 @@ impl MonitorApp {
     fn start_consumer(&self, ctx: egui::Context) {
         let (tx, rx) = std::sync::mpsc::channel();
         let desired = std::sync::Arc::new(std::sync::Mutex::new(
-            self.profiles.read().unwrap().desired_led_state()));
-        crate::led::spawn_poller(self.profiles.clone(), desired.clone());
+            self.profiles.read().unwrap().desired_led_state(self.dry_run.load(Ordering::Relaxed))));
+        crate::led::spawn_poller(self.profiles.clone(), self.dry_run.clone(), desired.clone());
         let lcd_frame = std::sync::Arc::new(std::sync::Mutex::new(crate::lcd::Framebuffer::new().pack()));
         crate::lcd::spawn_poller(
             self.profiles.clone(),
