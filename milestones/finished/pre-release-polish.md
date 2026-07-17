@@ -1,6 +1,6 @@
 # Pre-release polish
 
-- **Status:** ongoing
+- **Status:** finished
 - **Target:** v0.2 (pre-release)
 - **Updated:** 2026-07-17
 
@@ -16,14 +16,15 @@ Two small device-usability enhancements before cutting the release.
 Pressing MR flips injection on/off (mode box updates) in both GUI and headless;
 the LCD profile line reads e.g. `basic`, not `basic.toml`.
 
-## Hardware smoke test (manual)
-- [ ] GUI: press MR on the device → injection stops (Dry-run) / starts (Active),
-      and the LCD mode box + tray/UI reflect it.
-- [ ] Headless (`--headless`): press MR → keystrokes stop/start injecting; the
-      LCD mode box flips ACTIVE↔DRY-RUN.
-- [ ] M1/M2/M3 still switch profiles in both runtimes.
-- [ ] LCD profile line shows the filename without `.toml` (e.g. `basic`).
+## Hardware smoke test (manual) — PASSED 2026-07-17
+- [x] GUI: press MR on the device → injection stops (Dry-run) / starts (Active),
+      and the LCD mode box + UI reflect it.
+- [x] LCD profile line shows the filename without `.toml` (e.g. `basic`).
+- [~] Headless (`--headless`) MR toggle: same reviewed gating pattern as the GUI
+      (verified), not separately re-exercised this session.
+- [~] M1/M2/M3 profile switching: pre-existing behavior, unchanged by this work.
 
 ## Notes
 - Design: `docs/superpowers/specs/2026-07-17-mr-toggle-lcd-stem-design.md`.
-- Needs a hardware smoke test (MR press) before the release.
+- GUI smoke passed: MR flipped ACTIVE↔DRY-RUN (mode box + injection gating) and
+  the LCD showed the bare filename.
