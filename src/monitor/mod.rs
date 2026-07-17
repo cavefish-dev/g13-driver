@@ -76,6 +76,37 @@ fn toggle_main_window() {
     }
 }
 
+/// One Bindings-tab mapping row (shared by G-keys, thumb buttons, joystick):
+/// right-aligned name, key/combo field, validity mark, label field, repeat checkbox.
+fn render_mapping_row(
+    ui: &mut egui::Ui,
+    name: &str,
+    key_buf: &mut String,
+    label_buf: &mut String,
+    repeat_buf: &mut bool,
+    valid_keys: &HashSet<String>,
+) {
+    let green = egui::Color32::from_rgb(127, 224, 160);
+    let red = egui::Color32::from_rgb(220, 90, 90);
+    let dim = egui::Color32::from_gray(110);
+    ui.horizontal(|ui| {
+        ui.monospace(format!("{name:>5}"));
+        ui.add_space(6.0);
+        ui.add(egui::TextEdit::singleline(key_buf).desired_width(160.0));
+        let (mark, color) = if key_buf.is_empty() {
+            ("—", dim)
+        } else if combo_valid(key_buf, valid_keys) {
+            ("ok", green)
+        } else {
+            ("bad", red)
+        };
+        ui.colored_label(color, mark);
+        ui.add(egui::TextEdit::singleline(label_buf)
+            .desired_width(140.0).hint_text("label (optional)"));
+        ui.checkbox(repeat_buf, "repeat");
+    });
+}
+
 fn render_binding_row(
     ui: &mut egui::Ui,
     key: G13Key,
@@ -84,29 +115,12 @@ fn render_binding_row(
     label_edits: &mut HashMap<G13Key, String>,
     valid_keys: &HashSet<String>,
 ) {
-    let green = egui::Color32::from_rgb(127, 224, 160);
-    let red = egui::Color32::from_rgb(220, 90, 90);
-    let dim = egui::Color32::from_gray(110);
-    let buf = edits.entry(key).or_default();
-    let rep = repeat_edits.entry(key).or_default();
-    let lbl = label_edits.entry(key).or_default();
-    ui.horizontal(|ui| {
-        ui.monospace(format!("{key:?}"));
-        ui.add_space(6.0);
-        ui.add(egui::TextEdit::singleline(buf).desired_width(160.0));
-        let (mark, color) = if buf.is_empty() {
-            ("—", dim)
-        } else if combo_valid(buf, valid_keys) {
-            ("ok", green)
-        } else {
-            ("bad", red)
-        };
-        ui.colored_label(color, mark);
-        ui.add_space(6.0);
-        ui.checkbox(rep, "repeat");
-        ui.add_space(6.0);
-        ui.add(egui::TextEdit::singleline(lbl).desired_width(140.0).hint_text("label (optional)"));
-    });
+    let name = format!("{key:?}");
+    // Separate HashMaps → three independent &mut borrows, no aliasing.
+    let key_buf = edits.entry(key).or_default();
+    let label_buf = label_edits.entry(key).or_default();
+    let repeat_buf = repeat_edits.entry(key).or_default();
+    render_mapping_row(ui, &name, key_buf, label_buf, repeat_buf, valid_keys);
 }
 
 pub fn run(config: Arc<RwLock<ProfileSet>>, config_path: std::path::PathBuf, start_minimized: bool) -> Result<()> {
@@ -1199,22 +1213,9 @@ impl MonitorApp {
             ui.add_space(6.0);
             ui.separator();
             ui.label("Joystick");
-            let dim = egui::Color32::from_gray(110);
-            let green = egui::Color32::from_rgb(127, 224, 160);
-            let red = egui::Color32::from_rgb(220, 90, 90);
-            for (i, name) in ["Up", "Down", "Left", "Right"].iter().enumerate() {
-                ui.horizontal(|ui| {
-                    ui.monospace(format!("{name:>5}"));
-                    ui.add_space(6.0);
-                    ui.add(egui::TextEdit::singleline(&mut self.joy_edits[i]).desired_width(160.0));
-                    let b = &self.joy_edits[i];
-                    let (mark, color) = if b.is_empty() { ("—", dim) }
-                        else if combo_valid(b, &valid_keys) { ("ok", green) } else { ("bad", red) };
-                    ui.colored_label(color, mark);
-                    ui.add(egui::TextEdit::singleline(&mut self.joy_label_edits[i])
-                        .desired_width(120.0).hint_text("label"));
-                    ui.checkbox(&mut self.joy_repeat_edits[i], "repeat");
-                });
+            for (i, name) in ["Up", "Down", "Left", "Right"].into_iter().enumerate() {
+                render_mapping_row(ui, name, &mut self.joy_edits[i], &mut self.joy_label_edits[i],
+                    &mut self.joy_repeat_edits[i], &valid_keys);
             }
         });
 
