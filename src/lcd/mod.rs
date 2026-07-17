@@ -1,6 +1,7 @@
 mod font;
 
-use crate::config::ProfileSet;
+use crate::config::{JoystickDir, ProfileSet};
+use crate::joystick::{HoldAction, JoystickMapper};
 use crate::protocol::{G13Event, MKey};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
@@ -122,6 +123,87 @@ pub fn capture(
         combo,
         label,
     });
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum HeldId { Key(crate::protocol::G13Key), Dir(JoystickDir) }
+
+/// Stateful tracker of the currently-held button/direction and the most recent
+/// action fired, for the LCD's line-3 activity display. `on_event` drives a
+/// `JoystickMapper` internally so joystick direction holds are derived the same
+/// way the dispatcher derives key-hold transitions.
+pub struct ActivityTracker {
+    mapper: JoystickMapper,
+    held: Vec<(HeldId, LastAction)>, // ordered, most-recent last
+    last: Option<LastAction>,
+}
+
+impl ActivityTracker {
+    pub fn new() -> Self {
+        Self { mapper: JoystickMapper::new(), held: Vec::new(), last: None }
+    }
+
+    fn upsert(&mut self, id: HeldId, action: LastAction) {
+        self.held.retain(|(hid, _)| *hid != id);
+        self.held.push((id, action.clone()));
+        self.last = Some(action);
+    }
+
+    fn remove(&mut self, id: HeldId) {
+        self.held.retain(|(hid, _)| *hid != id);
+    }
+
+    pub fn on_event(&mut self, event: &G13Event, profiles: &Arc<RwLock<ProfileSet>>) {
+        match event {
+            G13Event::KeyDown(key) => {
+                let key = *key;
+                let (combo, label) = {
+                    let set = profiles.read().unwrap();
+                    match set.active_profile() {
+                        Some(p) => (p.get_binding(key).map(str::to_string), p.label(key).map(str::to_string)),
+                        None => (None, None),
+                    }
+                };
+                self.upsert(HeldId::Key(key), LastAction { button: format!("{key:?}"), combo, label });
+            }
+            G13Event::KeyUp(key) => self.remove(HeldId::Key(*key)),
+            G13Event::JoystickMove { x, y } => {
+                let (cfg, deadzone) = {
+                    let set = profiles.read().unwrap();
+                    (set.active_profile().and_then(|p| p.joystick()).cloned(), set.joystick_deadzone())
+                };
+                let Some(jc) = cfg else { return };
+                let actions = self.mapper.update(*x, *y, &jc, deadzone);
+                for a in actions {
+                    match a {
+                        HoldAction::KeyDown { dir, key } => {
+                            let label = {
+                                let set = profiles.read().unwrap();
+                                set.active_profile().and_then(|p| p.joystick_label(dir)).map(str::to_string)
+                            };
+                            self.upsert(HeldId::Dir(dir), LastAction {
+                                button: format!("{dir:?}"), combo: Some(key), label,
+                            });
+                        }
+                        HoldAction::KeyUp { dir, .. } => self.remove(HeldId::Dir(dir)),
+                    }
+                }
+            }
+            G13Event::MKeyDown(_) => { self.held.clear(); self.mapper = JoystickMapper::new(); }
+            G13Event::MKeyUp(_) => {}
+        }
+    }
+
+    pub fn current(&self, trigger: Line3Trigger) -> Option<LastAction> {
+        match trigger {
+            Line3Trigger::Last => self.last.clone(),
+            Line3Trigger::Held => self.held.last().map(|(_, a)| a.clone()),
+        }
+    }
+}
+
+impl Default for ActivityTracker {
+    fn default() -> Self { Self::new() }
 }
 
 impl Default for Framebuffer {
@@ -494,5 +576,55 @@ mod tests {
         assert_eq!(d.line2_source, Line2Source::Filename);
         assert_eq!(d.line3_trigger, Line3Trigger::Last);
         assert!(d.line3_mapping && d.line3_label);
+    }
+
+    // --- ActivityTracker ---
+
+    fn joystick_profiles_fixture() -> Arc<RwLock<crate::config::ProfileSet>> {
+        let d = std::env::temp_dir().join("g13-lcd-tracker-joystick");
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("profiles")).unwrap();
+        std::fs::write(d.join("profiles/basic.toml"),
+            "[joystick]\nup = \"w\"\n\n[joystick.labels]\nup = \"Fwd\"\n").unwrap();
+        std::fs::write(d.join("config.toml"),
+            "profiles_dir = \"profiles\"\nm1 = \"basic.toml\"\n").unwrap();
+        Arc::new(RwLock::new(crate::config::ProfileSet::load(&d.join("config.toml")).unwrap()))
+    }
+
+    #[test]
+    fn tracker_key_held_and_last() {
+        let p = profiles_fixture(); // [keys] G1="ctrl+c" [labels] G1="Copy"
+        let mut t = ActivityTracker::new();
+        t.on_event(&G13Event::KeyDown(G13Key::G1), &p);
+        let want = LastAction { button: "G1".into(), combo: Some("ctrl+c".into()), label: Some("Copy".into()) };
+        assert_eq!(t.current(Line3Trigger::Held), Some(want.clone()));
+        assert_eq!(t.current(Line3Trigger::Last), Some(want.clone()));
+        t.on_event(&G13Event::KeyUp(G13Key::G1), &p);
+        assert_eq!(t.current(Line3Trigger::Held), None);
+        assert_eq!(t.current(Line3Trigger::Last), Some(want));
+    }
+
+    #[test]
+    fn tracker_joystick_direction_held_and_released() {
+        let p = joystick_profiles_fixture();
+        let mut t = ActivityTracker::new();
+        t.on_event(&G13Event::JoystickMove { x: 127, y: 0 }, &p);
+        let want = LastAction { button: "Up".into(), combo: Some("w".into()), label: Some("Fwd".into()) };
+        assert_eq!(t.current(Line3Trigger::Held), Some(want.clone()));
+        assert_eq!(t.current(Line3Trigger::Last), Some(want));
+        t.on_event(&G13Event::JoystickMove { x: 127, y: 127 }, &p); // center
+        assert_eq!(t.current(Line3Trigger::Held), None);
+    }
+
+    #[test]
+    fn tracker_mkey_down_clears_held_but_keeps_last() {
+        let p = profiles_fixture();
+        let mut t = ActivityTracker::new();
+        t.on_event(&G13Event::KeyDown(G13Key::G1), &p);
+        let want = LastAction { button: "G1".into(), combo: Some("ctrl+c".into()), label: Some("Copy".into()) };
+        assert_eq!(t.current(Line3Trigger::Held), Some(want.clone()));
+        t.on_event(&G13Event::MKeyDown(MKey::M2), &p);
+        assert_eq!(t.current(Line3Trigger::Held), None);
+        assert_eq!(t.current(Line3Trigger::Last), Some(want));
     }
 }
