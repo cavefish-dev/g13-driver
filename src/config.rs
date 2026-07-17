@@ -44,6 +44,10 @@ pub struct RawJoystick {
     pub left: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub right: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub labels: Option<std::collections::HashMap<String, String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repeat: Option<std::collections::HashMap<String, bool>>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -101,6 +105,25 @@ impl ProfileSource {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum JoystickDir { Up, Down, Left, Right }
+
+impl JoystickDir {
+    pub fn as_str(&self) -> &'static str {
+        match self { Self::Up => "up", Self::Down => "down", Self::Left => "left", Self::Right => "right" }
+    }
+}
+
+pub fn parse_joystick_dir(s: &str) -> Option<JoystickDir> {
+    match s.to_ascii_lowercase().as_str() {
+        "up" => Some(JoystickDir::Up),
+        "down" => Some(JoystickDir::Down),
+        "left" => Some(JoystickDir::Left),
+        "right" => Some(JoystickDir::Right),
+        _ => None,
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct JoystickConfig {
     pub up: Option<String>,
@@ -115,6 +138,8 @@ pub struct Profile {
     joystick: Option<JoystickConfig>,
     repeat: HashMap<G13Key, bool>,
     labels: HashMap<G13Key, String>,
+    joystick_labels: HashMap<JoystickDir, String>,
+    joystick_repeat: HashMap<JoystickDir, bool>,
     meta_name: Option<String>,
     source: ProfileSource,
     modified: bool,
@@ -153,8 +178,27 @@ impl Profile {
             if !text.is_empty() { labels.insert(key, text); }
         }
 
+        let mut joystick_labels = HashMap::new();
+        let mut joystick_repeat = HashMap::new();
         let joystick = match raw.joystick {
-            Some(rj) => Some(parse_joystick(rj)?),
+            Some(rj) => {
+                if let Some(labels) = &rj.labels {
+                    for (name, text) in labels {
+                        let dir = parse_joystick_dir(name)
+                            .with_context(|| format!("unknown joystick direction in [joystick.labels]: {name}"))?;
+                        let text = text.trim().to_string();
+                        if !text.is_empty() { joystick_labels.insert(dir, text); }
+                    }
+                }
+                if let Some(rep) = &rj.repeat {
+                    for (name, on) in rep {
+                        let dir = parse_joystick_dir(name)
+                            .with_context(|| format!("unknown joystick direction in [joystick.repeat]: {name}"))?;
+                        joystick_repeat.insert(dir, *on);
+                    }
+                }
+                Some(parse_joystick(rj)?)
+            }
             None => None,
         };
 
@@ -168,7 +212,10 @@ impl Profile {
             None => (None, ProfileSource::User, false, None),
         };
 
-        Ok(Self { key_bindings, joystick, repeat, labels, meta_name, source, modified, origin })
+        Ok(Self {
+            key_bindings, joystick, repeat, labels, joystick_labels, joystick_repeat,
+            meta_name, source, modified, origin,
+        })
     }
 
     pub fn get_binding(&self, key: G13Key) -> Option<&str> {
@@ -229,6 +276,14 @@ impl Profile {
             .collect();
     }
 
+    pub fn joystick_label(&self, dir: JoystickDir) -> Option<&str> {
+        self.joystick_labels.get(&dir).map(String::as_str)
+    }
+
+    pub fn joystick_repeats(&self, dir: JoystickDir) -> bool {
+        self.joystick_repeat.get(&dir).copied().unwrap_or(false)
+    }
+
     /// Serialize this profile back to TOML (keys + joystick + repeat). Comments in the
     /// original file are not preserved (the file becomes GUI-managed).
     pub fn to_toml(&self) -> Result<String> {
@@ -244,6 +299,8 @@ impl Profile {
                 down: j.down.clone(),
                 left: j.left.clone(),
                 right: j.right.clone(),
+                labels: None,
+                repeat: None,
             });
         let repeat: HashMap<String, bool> = self.repeat.iter()
             .filter(|(_, &v)| v)
@@ -276,6 +333,8 @@ impl Default for Profile {
             joystick: None,
             repeat: HashMap::new(),
             labels: HashMap::new(),
+            joystick_labels: HashMap::new(),
+            joystick_repeat: HashMap::new(),
             meta_name: None,
             source: ProfileSource::User,
             modified: false,
@@ -1445,5 +1504,33 @@ G3 = "f5"
     fn to_toml_omits_empty_labels_table() {
         let p = Profile::from_raw(raw(&[("G1", "a")])).unwrap();
         assert!(!p.to_toml().unwrap().contains("[labels]"));
+    }
+
+    #[test]
+    fn joystick_labels_and_repeat_parse() {
+        let raw: RawConfig = toml::from_str(
+            "[joystick]\nup = \"w\"\ndown = \"s\"\n\
+             [joystick.labels]\nup = \"Forward\"\n\
+             [joystick.repeat]\ndown = true\n").unwrap();
+        let p = Profile::from_raw(raw).unwrap();
+        assert_eq!(p.joystick_label(JoystickDir::Up), Some("Forward"));
+        assert_eq!(p.joystick_label(JoystickDir::Down), None);
+        assert!(p.joystick_repeats(JoystickDir::Down));
+        assert!(!p.joystick_repeats(JoystickDir::Up));
+    }
+
+    #[test]
+    fn joystick_without_labels_repeat_is_backward_compatible() {
+        let raw: RawConfig = toml::from_str("[joystick]\nup = \"w\"\n").unwrap();
+        let p = Profile::from_raw(raw).unwrap();
+        assert_eq!(p.joystick_label(JoystickDir::Up), None);
+        assert!(!p.joystick_repeats(JoystickDir::Up));
+    }
+
+    #[test]
+    fn joystick_unknown_direction_key_is_error() {
+        let raw: RawConfig = toml::from_str(
+            "[joystick]\nup = \"w\"\n[joystick.labels]\ndiagonal = \"x\"\n").unwrap();
+        assert!(Profile::from_raw(raw).is_err());
     }
 }
