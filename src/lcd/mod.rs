@@ -307,20 +307,24 @@ pub fn spawn_poller(
     frame: Arc<Mutex<[u8; 992]>>,
 ) {
     thread::spawn(move || loop {
-        let (cfg, model) = {
+        // `profiles.read()` guard is dropped before `tracker.lock()` is taken, so we
+        // never hold both simultaneously (see `on_event`, which takes `profiles.read()`
+        // while holding the tracker lock — the reverse order would deadlock).
+        let (cfg, mode, slot, filename, display_name, clock) = {
             let set = profiles.read().unwrap();
             let cfg = set.lcd_config();
             let clock = if cfg.line1_clock { Some(local_hh_mm()) } else { None };
-            let model = LcdModel {
-                mode: if dry_run.load(Ordering::Relaxed) { Mode::DryRun } else { Mode::Active },
-                slot: set.active(),
-                filename: set.active_name_stem().map(str::to_string),
-                display_name: set.active_profile().and_then(|p| p.meta_name()).map(str::to_string),
-                last: tracker.lock().unwrap().current(cfg.line3_trigger),
+            (
+                cfg,
+                if dry_run.load(Ordering::Relaxed) { Mode::DryRun } else { Mode::Active },
+                set.active(),
+                set.active_name_stem().map(str::to_string),
+                set.active_profile().and_then(|p| p.meta_name()).map(str::to_string),
                 clock,
-            };
-            (cfg, model)
+            )
         };
+        let last = tracker.lock().unwrap().current(cfg.line3_trigger);
+        let model = LcdModel { mode, slot, filename, display_name, last, clock };
         *frame.lock().unwrap() = render(&model, &cfg).pack();
         thread::sleep(Duration::from_millis(150));
     });
