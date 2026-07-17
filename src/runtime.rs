@@ -45,10 +45,10 @@ pub fn run_headless(config: Arc<RwLock<ProfileSet>>) -> Result<()> {
     let desired = Arc::new(Mutex::new(config.read().unwrap().desired_led_state()));
     crate::led::spawn_poller(config.clone(), desired.clone());
     let lcd_frame = Arc::new(Mutex::new(crate::lcd::Framebuffer::new().pack()));
-    let last_action = Arc::new(Mutex::new(None));
+    let tracker = Arc::new(Mutex::new(crate::lcd::ActivityTracker::new()));
     // Headless starts Active (injecting); MR toggles this at runtime. Not persisted.
     let dry_run = Arc::new(AtomicBool::new(false));
-    crate::lcd::spawn_poller(config.clone(), dry_run.clone(), last_action.clone(), lcd_frame.clone());
+    crate::lcd::spawn_poller(config.clone(), dry_run.clone(), tracker.clone(), lcd_frame.clone());
     let desired_sup = desired.clone();
     let lcd_sup = lcd_frame.clone();
     thread::spawn(move || loop {
@@ -69,7 +69,7 @@ pub fn run_headless(config: Arc<RwLock<ProfileSet>>) -> Result<()> {
     loop {
         match rx.recv_timeout(Duration::from_millis(15)) {
             Ok(event) => {
-                crate::lcd::capture(&event, &config, &last_action);
+                tracker.lock().unwrap().on_event(&event, &config);
                 if let G13Event::MKeyDown(crate::protocol::MKey::MR) = event {
                     dry_run.store(!dry_run.load(Ordering::Relaxed), Ordering::Relaxed);
                 }

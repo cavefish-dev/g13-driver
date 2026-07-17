@@ -99,32 +99,6 @@ pub fn text_width(text: &str, scale: i32) -> i32 {
     text.chars().count() as i32 * 6 * scale
 }
 
-/// On a discrete-button KeyDown, record what it fired (button name + bound combo
-/// + label) from the profile active at press time. No-op for other events.
-pub fn capture(
-    event: &G13Event,
-    profiles: &Arc<RwLock<ProfileSet>>,
-    cell: &Arc<Mutex<Option<LastAction>>>,
-) {
-    let G13Event::KeyDown(key) = event else { return };
-    let key = *key;
-    let (combo, label) = {
-        let set = profiles.read().unwrap();
-        match set.active_profile() {
-            Some(p) => (
-                p.get_binding(key).map(str::to_string),
-                p.label(key).map(str::to_string),
-            ),
-            None => (None, None),
-        }
-    };
-    *cell.lock().unwrap() = Some(LastAction {
-        button: format!("{key:?}"),
-        combo,
-        label,
-    });
-}
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum HeldId { Key(crate::protocol::G13Key), Dir(JoystickDir) }
 
@@ -329,7 +303,7 @@ pub fn render(model: &LcdModel, cfg: &LcdConfig) -> Framebuffer {
 pub fn spawn_poller(
     profiles: Arc<RwLock<ProfileSet>>,
     dry_run: Arc<AtomicBool>,
-    last: Arc<Mutex<Option<LastAction>>>,
+    tracker: Arc<Mutex<ActivityTracker>>,
     frame: Arc<Mutex<[u8; 992]>>,
 ) {
     thread::spawn(move || loop {
@@ -342,7 +316,7 @@ pub fn spawn_poller(
                 slot: set.active(),
                 filename: set.active_name_stem().map(str::to_string),
                 display_name: set.active_profile().and_then(|p| p.meta_name()).map(str::to_string),
-                last: last.lock().unwrap().clone(),
+                last: tracker.lock().unwrap().current(cfg.line3_trigger),
                 clock,
             };
             (cfg, model)
@@ -583,59 +557,6 @@ mod tests {
         std::fs::write(d.join("config.toml"),
             "profiles_dir = \"profiles\"\nm1 = \"basic.toml\"\n").unwrap();
         Arc::new(RwLock::new(crate::config::ProfileSet::load(&d.join("config.toml")).unwrap()))
-    }
-
-    #[test]
-    fn capture_resolves_binding_and_label() {
-        let p = profiles_fixture();
-        let cell = Arc::new(Mutex::new(None));
-        capture(&G13Event::KeyDown(G13Key::G1), &p, &cell);
-        let got = cell.lock().unwrap().clone().unwrap();
-        assert_eq!(got.button, "G1");
-        assert_eq!(got.combo.as_deref(), Some("ctrl+c"));
-        assert_eq!(got.label.as_deref(), Some("Copy"));
-    }
-
-    #[test]
-    fn capture_unbound_key_has_no_combo() {
-        let p = profiles_fixture();
-        let cell = Arc::new(Mutex::new(None));
-        capture(&G13Event::KeyDown(G13Key::G7), &p, &cell); // G7 unbound
-        let got = cell.lock().unwrap().clone().unwrap();
-        assert_eq!(got.button, "G7");
-        assert_eq!(got.combo, None);
-        assert_eq!(got.label, None);
-    }
-
-    #[test]
-    fn capture_active_slot_empty_has_no_combo_or_label() {
-        // Manifest mode (profiles_dir set) with no m1/m2/m3 assigned: active
-        // defaults to M1, whose slot is empty, so active_profile() is None.
-        let d = std::env::temp_dir().join("g13-lcd-capture-empty");
-        let _ = std::fs::remove_dir_all(&d);
-        std::fs::create_dir_all(d.join("profiles")).unwrap();
-        std::fs::write(d.join("config.toml"), "profiles_dir = \"profiles\"\n").unwrap();
-        let p = Arc::new(RwLock::new(
-            crate::config::ProfileSet::load(&d.join("config.toml")).unwrap(),
-        ));
-        assert!(p.read().unwrap().active_profile().is_none());
-
-        let cell = Arc::new(Mutex::new(None));
-        capture(&G13Event::KeyDown(G13Key::G1), &p, &cell);
-        let got = cell.lock().unwrap().clone().unwrap();
-        assert_eq!(got.button, "G1");
-        assert_eq!(got.combo, None);
-        assert_eq!(got.label, None);
-    }
-
-    #[test]
-    fn capture_ignores_non_keydown() {
-        let p = profiles_fixture();
-        let cell = Arc::new(Mutex::new(None));
-        capture(&G13Event::KeyUp(G13Key::G1), &p, &cell);
-        capture(&G13Event::JoystickMove { x: 0, y: 0 }, &p, &cell);
-        capture(&G13Event::MKeyDown(MKey::M2), &p, &cell);
-        assert!(cell.lock().unwrap().is_none());
     }
 
     #[test]

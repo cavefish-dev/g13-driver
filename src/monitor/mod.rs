@@ -217,7 +217,7 @@ pub struct MonitorApp {
     catalog_state: std::sync::Arc<std::sync::Mutex<crate::catalog::CatalogState>>,
     catalog_status: std::sync::Arc<std::sync::Mutex<Option<String>>>,
     pending_revert: Option<(std::path::PathBuf, String)>,
-    last_action: Arc<Mutex<Option<crate::lcd::LastAction>>>,
+    tracker: Arc<Mutex<crate::lcd::ActivityTracker>>,
 }
 
 impl MonitorApp {
@@ -261,7 +261,7 @@ impl MonitorApp {
             catalog_state: std::sync::Arc::new(std::sync::Mutex::new(crate::catalog::CatalogState::Idle)),
             catalog_status: std::sync::Arc::new(std::sync::Mutex::new(None)),
             pending_revert: None,
-            last_action: Arc::new(Mutex::new(None)),
+            tracker: Arc::new(Mutex::new(crate::lcd::ActivityTracker::new())),
         };
 
         // Windows: build the tray from the current state and start the
@@ -369,7 +369,7 @@ impl MonitorApp {
         crate::lcd::spawn_poller(
             self.profiles.clone(),
             self.dry_run.clone(),
-            self.last_action.clone(),
+            self.tracker.clone(),
             lcd_frame.clone(),
         );
 
@@ -405,8 +405,8 @@ impl MonitorApp {
         let state = self.state.clone();
         let dry_run = self.dry_run.clone();
         let profiles = self.profiles.clone();
-        let last_action = self.last_action.clone();
-        std::thread::spawn(move || consumer_loop(rx, dispatcher, state, dry_run, ctx, profiles, last_action));
+        let tracker = self.tracker.clone();
+        std::thread::spawn(move || consumer_loop(rx, dispatcher, state, dry_run, ctx, profiles, tracker));
     }
 }
 
@@ -424,14 +424,14 @@ fn consumer_loop(
     dry_run: Arc<AtomicBool>,
     ctx: egui::Context,
     profiles: Arc<RwLock<crate::config::ProfileSet>>,
-    last_action: Arc<Mutex<Option<crate::lcd::LastAction>>>,
+    tracker: Arc<Mutex<crate::lcd::ActivityTracker>>,
 ) {
     let mut was_active = !dry_run.load(Ordering::Relaxed);
     loop {
         match rx.recv_timeout(Duration::from_millis(15)) {
             Ok(event) => {
                 state.lock().unwrap().apply(&event);
-                crate::lcd::capture(&event, &profiles, &last_action);
+                tracker.lock().unwrap().on_event(&event, &profiles);
                 if let G13Event::MKeyDown(crate::protocol::MKey::MR) = event {
                     dry_run.store(!dry_run.load(Ordering::Relaxed), Ordering::Relaxed);
                 }
@@ -1329,12 +1329,16 @@ impl MonitorApp {
         ui.label("Live preview of what the G13's screen shows.");
         ui.add_space(8.0);
 
-        // Build the same model + config the poller uses.
-        let (cfg, model) = {
+        // Build the same model + config the poller uses. `cfg` is fetched (and its
+        // read guard dropped) before the tracker lock, so we never hold a
+        // `profiles.read()` guard across `tracker.lock()` (see consumer_loop /
+        // on_event, which takes `profiles.read()` while holding the tracker lock).
+        let cfg = self.profiles.read().unwrap().lcd_config();
+        let clock = if cfg.line1_clock { Some(crate::lcd::local_hh_mm()) } else { None };
+        let last = self.tracker.lock().unwrap().current(cfg.line3_trigger);
+        let model = {
             let set = self.profiles.read().unwrap();
-            let cfg = set.lcd_config();
-            let clock = if cfg.line1_clock { Some(crate::lcd::local_hh_mm()) } else { None };
-            let model = crate::lcd::LcdModel {
+            crate::lcd::LcdModel {
                 mode: if self.dry_run.load(Ordering::Relaxed) {
                     crate::lcd::Mode::DryRun
                 } else {
@@ -1343,10 +1347,9 @@ impl MonitorApp {
                 slot: set.active(),
                 filename: set.active_name_stem().map(str::to_string),
                 display_name: set.active_profile().and_then(|p| p.meta_name()).map(str::to_string),
-                last: self.last_action.lock().unwrap().clone(),
+                last,
                 clock,
-            };
-            (cfg, model)
+            }
         };
         let fb = crate::lcd::render(&model, &cfg);
 
