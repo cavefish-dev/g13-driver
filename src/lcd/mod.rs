@@ -227,6 +227,52 @@ pub fn spawn_poller(
     });
 }
 
+macro_rules! str_enum {
+    ($name:ident { $($variant:ident => $s:literal),+ $(,)? }) => {
+        #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+        pub enum $name { $($variant),+ }
+        impl $name {
+            pub fn parse(s: &str) -> Option<Self> {
+                match s.trim().to_ascii_lowercase().as_str() {
+                    $($s => Some(Self::$variant),)+
+                    _ => None,
+                }
+            }
+            pub fn as_str(&self) -> &'static str {
+                match self { $(Self::$variant => $s),+ }
+            }
+        }
+    };
+}
+str_enum!(Line1Left { Name => "name", Version => "version" });
+str_enum!(ModeDisplay { Label => "label", Icon => "icon", Off => "off" });
+str_enum!(Line2Source { Filename => "filename", Display => "display" });
+str_enum!(Line3Trigger { Last => "last", Held => "held" });
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct LcdConfig {
+    pub line1_left: Line1Left,
+    pub line1_clock: bool,
+    pub line1_mode: ModeDisplay,
+    pub line2_source: Line2Source,
+    pub line3_trigger: Line3Trigger,
+    pub line3_mapping: bool,
+    pub line3_label: bool,
+}
+impl Default for LcdConfig {
+    fn default() -> Self {
+        Self {
+            line1_left: Line1Left::Name,
+            line1_clock: false,
+            line1_mode: ModeDisplay::Label,
+            line2_source: Line2Source::Filename,
+            line3_trigger: Line3Trigger::Last,
+            line3_mapping: true,
+            line3_label: true,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -427,5 +473,26 @@ mod tests {
         capture(&G13Event::JoystickMove { x: 0, y: 0 }, &p, &cell);
         capture(&G13Event::MKeyDown(MKey::M2), &p, &cell);
         assert!(cell.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn enum_parse_and_as_str_round_trip() {
+        assert_eq!(Line1Left::parse("version"), Some(Line1Left::Version));
+        assert_eq!(Line1Left::Version.as_str(), "version");
+        assert_eq!(ModeDisplay::parse("off"), Some(ModeDisplay::Off));
+        assert_eq!(Line2Source::parse("display"), Some(Line2Source::Display));
+        assert_eq!(Line3Trigger::parse("held"), Some(Line3Trigger::Held));
+        assert_eq!(Line1Left::parse("bogus"), None);
+    }
+
+    #[test]
+    fn lcd_config_default() {
+        let d = LcdConfig::default();
+        assert_eq!(d.line1_left, Line1Left::Name);
+        assert!(!d.line1_clock);
+        assert_eq!(d.line1_mode, ModeDisplay::Label);
+        assert_eq!(d.line2_source, Line2Source::Filename);
+        assert_eq!(d.line3_trigger, Line3Trigger::Last);
+        assert!(d.line3_mapping && d.line3_label);
     }
 }
