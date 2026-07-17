@@ -133,7 +133,11 @@ pub fn run(config: Arc<RwLock<ProfileSet>>, config_path: std::path::PathBuf, sta
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([660.0, 560.0])
             .with_resizable(false)
-            .with_visible(!start_minimized),
+            .with_visible(!start_minimized)
+            .with_icon(std::sync::Arc::new({
+                let (rgba, width, height) = crate::icon::render_g13_rgba(4, [230, 230, 230, 255], [24, 24, 24, 255]);
+                egui::IconData { rgba, width, height }
+            })),
         ..Default::default()
     };
 

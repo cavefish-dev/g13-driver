@@ -23,18 +23,14 @@ pub fn icon_state(connected: bool, active: bool) -> IconState {
     }
 }
 
-/// A flat 32×32 RGBA icon in the state's colour (red / green / grey).
+/// A "g13" glyph icon in the state's colour (red / green / grey) on near-black.
 pub fn icon_rgba(state: IconState) -> (Vec<u8>, u32, u32) {
     let (r, g, b) = match state {
         IconState::Problem => (210, 70, 70),
         IconState::Active  => (95, 200, 130),
         IconState::DryRun  => (140, 140, 140),
     };
-    let mut buf = Vec::with_capacity(32 * 32 * 4);
-    for _ in 0..(32 * 32) {
-        buf.extend_from_slice(&[r, g, b, 255]);
-    }
-    (buf, 32, 32)
+    crate::icon::render_g13_rgba(3, [r, g, b, 255], [24, 24, 24, 255])
 }
 
 fn make_icon(state: IconState) -> Result<Icon> {
@@ -144,9 +140,8 @@ mod tests {
     }
 
     #[test]
-    fn icon_rgba_is_32x32() {
+    fn icon_rgba_buffer_matches_dimensions() {
         let (buf, w, h) = icon_rgba(IconState::Active);
-        assert_eq!((w, h), (32, 32));
-        assert_eq!(buf.len(), 32 * 32 * 4);
+        assert_eq!(buf.len() as u32, w * h * 4);
     }
 }
