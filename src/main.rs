@@ -8,6 +8,8 @@ mod catalog;
 mod config;
 mod device_state;
 mod dispatcher;
+mod g13_glyphs;
+mod icon;
 mod injector;
 mod joystick;
 mod lcd;
