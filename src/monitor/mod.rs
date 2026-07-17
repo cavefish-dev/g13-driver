@@ -186,6 +186,8 @@ pub struct MonitorApp {
     repeat_edits: HashMap<G13Key, bool>,
     label_edits: HashMap<G13Key, String>,
     joy_edits: [String; 4],
+    joy_label_edits: [String; 4],
+    joy_repeat_edits: [bool; 4],
     edits_for: Option<String>,
     save_status: Option<String>,
     #[cfg(windows)]
@@ -228,6 +230,8 @@ impl MonitorApp {
             repeat_edits: HashMap::new(),
             label_edits: HashMap::new(),
             joy_edits: [String::new(), String::new(), String::new(), String::new()],
+            joy_label_edits: [String::new(), String::new(), String::new(), String::new()],
+            joy_repeat_edits: [false; 4],
             edits_for: None,
             save_status: None,
             #[cfg(windows)]
@@ -1056,6 +1060,20 @@ impl MonitorApp {
                 ];
             }
             drop(set);
+            let dirs = [crate::config::JoystickDir::Up, crate::config::JoystickDir::Down,
+                        crate::config::JoystickDir::Left, crate::config::JoystickDir::Right];
+            let (jl, jr) = {
+                let set = self.profiles.read().unwrap();
+                match set.active_profile() {
+                    Some(p) => (
+                        dirs.map(|d| p.joystick_label(d).unwrap_or("").to_string()),
+                        dirs.map(|d| p.joystick_repeats(d)),
+                    ),
+                    None => (Default::default(), [false; 4]),
+                }
+            };
+            self.joy_label_edits = jl;
+            self.joy_repeat_edits = jr;
             self.edits_for = active_name.clone();
             self.save_status = None;
         }
@@ -1114,10 +1132,18 @@ impl MonitorApp {
                     let joystick = if jc.up.is_some() || jc.down.is_some() || jc.left.is_some() || jc.right.is_some() {
                         Some(jc)
                     } else { None };
-                    // STOPGAP: joystick label/repeat edits aren't wired into the GUI yet
-                    // (Task 5 fleshes this out); pass empty maps so nothing is lost on save.
+                    let dirs = [crate::config::JoystickDir::Up, crate::config::JoystickDir::Down,
+                                crate::config::JoystickDir::Left, crate::config::JoystickDir::Right];
+                    let mut joystick_labels = HashMap::new();
+                    let mut joystick_repeat = HashMap::new();
+                    for (i, d) in dirs.iter().enumerate() {
+                        if self.joy_edits[i].trim().is_empty() { continue; } // no key -> skip
+                        let lbl = self.joy_label_edits[i].trim();
+                        if !lbl.is_empty() { joystick_labels.insert(*d, lbl.to_string()); }
+                        if self.joy_repeat_edits[i] { joystick_repeat.insert(*d, true); }
+                    }
                     match self.profiles.write().unwrap().save_active_bindings(
-                        bindings, repeat, labels, joystick, HashMap::new(), HashMap::new()) {
+                        bindings, repeat, labels, joystick, joystick_labels, joystick_repeat) {
                         Ok(()) => self.save_status = Some("saved".to_string()),
                         Err(e) => {
                             log::warn!("save failed: {e:#}");
@@ -1185,6 +1211,9 @@ impl MonitorApp {
                     let (mark, color) = if b.is_empty() { ("—", dim) }
                         else if combo_valid(b, &valid_keys) { ("ok", green) } else { ("bad", red) };
                     ui.colored_label(color, mark);
+                    ui.add(egui::TextEdit::singleline(&mut self.joy_label_edits[i])
+                        .desired_width(120.0).hint_text("label"));
+                    ui.checkbox(&mut self.joy_repeat_edits[i], "repeat");
                 });
             }
         });
