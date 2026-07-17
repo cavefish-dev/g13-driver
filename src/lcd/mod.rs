@@ -244,7 +244,7 @@ pub fn render(model: &LcdModel, cfg: &LcdConfig) -> Framebuffer {
     // so they never reach the right cluster and don't need width clamping.
     fb.draw_text(0, 0, left, 1);
 
-    // Line 1 right cluster: [clock] [mode]. Build right-to-left.
+    // Line 1 right cluster: [mode]. Build right-to-left.
     let mode_text = match model.mode { Mode::Active => "ACTIVE", Mode::DryRun => "DRY-RUN" };
     let filled = matches!(model.mode, Mode::Active);
     let mut x = LCD_W as i32;
@@ -262,12 +262,13 @@ pub fn render(model: &LcdModel, cfg: &LcdConfig) -> Framebuffer {
             fb.draw_hline(bx, 1, 6); fb.draw_hline(bx, 6, 6);
             for dy in 1..7 { fb.set_pixel(bx, dy, true); fb.set_pixel(bx + 5, dy, true); }
         }
-        x -= 3; // gap before clock
     }
+
+    // Clock: centered on line 1.
     if cfg.line1_clock {
         if let Some(clk) = &model.clock {
-            x -= text_width(clk, 1);
-            fb.draw_text(x, 0, clk, 1);
+            let cx = (LCD_W as i32 - text_width(clk, 1)) / 2;
+            fb.draw_text(cx, 0, clk, 1);
         }
     }
 
@@ -519,6 +520,20 @@ mod tests {
         let mut m = model(None); m.clock = Some("12:34".into());
         let fb = render(&m, &cfg); // must not panic; title band has content
         assert!((0..LCD_W).any(|x| (0..8).any(|y| fb.get(x, y))));
+    }
+
+    #[test]
+    fn render_clock_is_centered() {
+        let mut cfg = LcdConfig::default();
+        cfg.line1_clock = true;
+        cfg.line1_mode = ModeDisplay::Off; // isolate the clock
+        let mut m = model(None); // existing test helper
+        m.clock = Some("12:34".into());
+        let fb = render(&m, &cfg);
+        // "12:34" is 30px wide, centered at x = (160-30)/2 = 65..95 → lit pixels in the center band.
+        assert!((65..95).any(|x| (0..8).any(|y| fb.get(x, y))));
+        // ...and nothing in the old far-right clock spot (x ~130..160 on the title row).
+        assert!(!(130..160).any(|x| (0..8).any(|y| fb.get(x, y))));
     }
 
     #[test]
