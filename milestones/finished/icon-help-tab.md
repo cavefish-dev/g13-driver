@@ -1,6 +1,6 @@
 # "g13" icon identity + Help tab
 
-- **Status:** ongoing
+- **Status:** finished
 - **Target:** v0.2
 - **Updated:** 2026-07-17
 
@@ -23,8 +23,11 @@ Tray/window/exe all show "g13" (tray in the status color); Help tab renders a us
 - Risk: `winres`/`windres` on the GNU toolchain — verify early; exe icon is deferrable
   without blocking the tray/window icons.
 
-## Hardware smoke test (manual)
-- [ ] Tray icon shows "g13" and its color tracks Active (green) / Dry-run (grey) / disconnected (red).
-- [ ] Window title-bar / alt-tab shows the "g13" icon.
-- [ ] The built exe shows "g13" in Explorer and the taskbar.
-- [ ] The Help tab renders and scrolls with accurate content.
+## Hardware smoke test (manual) — PASSED 2026-07-19
+- [x] Tray icon shows "g13" and its color tracks Active (green) / Dry-run (grey) / disconnected (red).
+- [x] Window title-bar / alt-tab shows the "g13" icon.
+- [x] The built exe shows "g13" in Explorer and the taskbar.
+- [x] The Help tab renders and scrolls with accurate content.
+
+## Note
+- Icon made square + vertically centered after smoke feedback (window icon was stretched); commit ce2f1dd.
