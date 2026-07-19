@@ -568,10 +568,20 @@ mod tests {
 
     use crate::protocol::G13Key;
 
+    // A unique temp dir per call — fixtures must NOT share a fixed path, or tests
+    // running in parallel race on remove/recreate (flaky "combo: None" on CI).
+    fn unique_dir(tag: &str) -> std::path::PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static CTR: AtomicU64 = AtomicU64::new(0);
+        let n = CTR.fetch_add(1, Ordering::Relaxed);
+        let d = std::env::temp_dir().join(format!("g13-lcd-{tag}-{n}"));
+        let _ = std::fs::remove_dir_all(&d);
+        d
+    }
+
     // Build a single-M1-profile ProfileSet with G1->ctrl+c labelled "Copy".
     fn profiles_fixture() -> Arc<RwLock<crate::config::ProfileSet>> {
-        let d = std::env::temp_dir().join("g13-lcd-capture");
-        let _ = std::fs::remove_dir_all(&d);
+        let d = unique_dir("capture");
         std::fs::create_dir_all(d.join("profiles")).unwrap();
         std::fs::write(d.join("profiles/basic.toml"),
             "[keys]\nG1 = \"ctrl+c\"\n\n[labels]\nG1 = \"Copy\"\n").unwrap();
@@ -604,8 +614,7 @@ mod tests {
     // --- ActivityTracker ---
 
     fn joystick_profiles_fixture() -> Arc<RwLock<crate::config::ProfileSet>> {
-        let d = std::env::temp_dir().join("g13-lcd-tracker-joystick");
-        let _ = std::fs::remove_dir_all(&d);
+        let d = unique_dir("tracker-joystick");
         std::fs::create_dir_all(d.join("profiles")).unwrap();
         std::fs::write(d.join("profiles/basic.toml"),
             "[joystick]\nup = \"w\"\n\n[joystick.labels]\nup = \"Fwd\"\n").unwrap();
