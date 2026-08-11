@@ -1,6 +1,6 @@
 # Windows installer (Inno Setup)
 
-- **Status:** ongoing
+- **Status:** finished (implementation) — verification pending
 - **Target:** v0.2 (distribution)
 - **Updated:** 2026-08-11
 
@@ -22,7 +22,7 @@ uninstall removes the app. Both installer and zip are release assets.
 - Design: `docs/superpowers/specs/2026-08-11-windows-installer-design.md`.
 - Follow-up: code-signing proposal (cert acquisition + CI signing).
 
-## Smoke test (manual)
+## Smoke test (manual) — PENDING (not run before merge; run when convenient)
 - [ ] Run the locally-built `g13-driver-v0.2.1-test-setup.exe`: installs to
       %LOCALAPPDATA%\Programs\g13-driver with NO UAC prompt.
 - [ ] Start-menu shortcut shows the "g13" icon and launches the app.
@@ -30,3 +30,7 @@ uninstall removes the app. Both installer and zip are release assets.
 - [ ] Re-run the installer over an edited config.toml -> the edit is preserved.
 - [ ] Uninstall (Add/Remove Programs) removes the app.
 - [ ] (next release) CI builds + publishes setup.exe alongside the zip.
+
+> Merged with the `.iss` proven by a local ISCC compile (8.3MB setup.exe) and both
+> code tasks reviewed (a release-blocking `find`/pipefail bug in the CI step was caught
+> and fixed). Still to confirm: a manual install run, and the CI build at the next release.
