@@ -34,3 +34,11 @@ uninstall removes the app. Both installer and zip are release assets.
 > Merged with the `.iss` proven by a local ISCC compile (8.3MB setup.exe) and both
 > code tasks reviewed (a release-blocking `find`/pipefail bug in the CI step was caught
 > and fixed). Still to confirm: a manual install run, and the CI build at the next release.
+
+## Code-signing decision (2026-08-11): STAY UNSIGNED
+Deliberate — a personal OSS tool; the README documents the SmartScreen "unknown
+publisher → Run anyway" workaround. Not an oversight. Revisit path if ever wanted:
+**Azure Trusted Signing** (~$120/yr, cloud HSM, has a first-party GitHub Action) is the
+CI-friendly choice; it drops into `release.yml` as a signing step after the build +
+after ISCC, with no change to the installer/exe layout. Avoid hardware-token OV certs
+for CI (USB token doesn't suit GitHub-hosted runners).
