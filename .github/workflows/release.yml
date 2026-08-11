@@ -92,7 +92,10 @@ jobs:
           VERSION: ${{ needs.prepare.outputs.version }}
         run: |
           choco install innosetup -y --no-progress
-          ISCC="$(find "/c/Program Files (x86)/Inno Setup 6" "/c/Program Files/Inno Setup 6" -name ISCC.exe 2>/dev/null | head -n1)"
+          # `|| true`: `find` exits non-zero when a search root is absent (the P.F. path
+          # won't exist — Inno is 32-bit), which under `set -eo pipefail` would abort the
+          # step before the loud check below. Guard it so the `test -n` gate runs.
+          ISCC="$(find "/c/Program Files (x86)/Inno Setup 6" "/c/Program Files/Inno Setup 6" -name ISCC.exe 2>/dev/null | head -n1 || true)"
           test -n "$ISCC" || { echo "ISCC.exe not found after choco install"; exit 1; }
           # Give the setup.exe the g13 icon that build.rs generated (best-effort).
           ICO="$(find target/release/build -name g13.ico | head -n1 || true)"
