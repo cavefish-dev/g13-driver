@@ -10,3 +10,13 @@ First run:
 
 License: GPL-3.0-or-later (see LICENSE).
 Project: https://github.com/cavefish-dev/g13-driver
+
+Installer notes:
+  - The installer and g13-driver.exe are currently unsigned. Windows SmartScreen
+    may show an "unknown publisher" prompt the first time you run setup.exe (or
+    the app itself) — click "More info" then "Run anyway" to proceed.
+  - Setup.exe installs per-user (into your own profile, under
+    %LOCALAPPDATA%\Programs\g13-driver) — no administrator rights are needed,
+    and it updates in place on top of an existing install.
+  - Prefer not to run an installer? The portable zip (just the exe + config +
+    profiles, no install step) remains available on the releases page.

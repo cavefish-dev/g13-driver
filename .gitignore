@@ -5,3 +5,7 @@
 
 # Personal, machine-local agent instructions (never checked in)
 /CLAUDE.local.md
+
+# Windows installer build outputs (generated locally/CI, not tracked)
+packaging/g13.ico
+*-setup.exe
